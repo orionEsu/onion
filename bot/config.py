@@ -36,4 +36,4 @@ DAILY_BACKUP_MINUTE: int = int(os.getenv("DAILY_BACKUP_MINUTE", "0"))
 # Undo expiry
 UNDO_EXPIRY_SECONDS: int = 300  # 5 minutes
 
-DB_PATH: Path = Path(__file__).resolve().parent.parent / "tasks.db"
+DB_PATH: Path = Path(os.getenv("DB_PATH", str(Path(__file__).resolve().parent.parent / "tasks.db")))
