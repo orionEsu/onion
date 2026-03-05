@@ -96,12 +96,15 @@ Examples: "backup my data", "send me the database", "export my tasks"
 
 17. COMPOUND ACTIONS (multiple things in one message):
 {{ "intent": "compound", "actions": [action1, action2, ...] }}
-When the user asks to do multiple things at once — whether on separate lines, separated by "and", or in any combined form — return a compound intent with an array of individual action objects. Each action must be a complete intent object.
+When the user's message contains MORE THAN ONE action — separated by commas, "and", "then", "also", periods, newlines, or any combination — ALWAYS return a compound intent wrapping each action as a separate object. Each action must be a complete intent object with all its required fields.
 Examples:
+- "remove task 4, create call pamela, set task 2 as recurring for every two days" -> compound with delete + add_task + edit_task
 - "create social label and add it to task 3" -> compound with add_label + assign_label
 - "delete task 1\nadd go to the mechanic tomorrow" -> compound with delete + add_task
 - "mark task 2 done and move task 3 to Friday" -> compound with done + edit_task
 - "buy milk tomorrow and call dentist on Monday" -> compound with two add_task actions
+- "finish the groceries task. also add buy shoes on Saturday" -> compound with done + add_task
+- "add gym at 6am then mark task 1 done" -> compound with add_task + done
 
 18. HELP:
 {{ "intent": "help" }}
@@ -123,7 +126,7 @@ RULES:
 - Available labels: {labels}
 - confidence: 1.0 = very certain, lower if ambiguous.
 - Task references: When the user refers to a task by number, use "task_id". When they refer by name/description (e.g. "the groceries task", "mechanic task"), use "task_description" with a keyword. Only one of task_id or task_description should be non-null.
-- Multi-line or multi-action messages: If the message contains multiple commands (on separate lines or joined by "and"/"then"), ALWAYS use the compound intent to wrap them all."""
+- Multi-action detection: If the message contains more than one action (separated by commas, "and", "then", "also", periods, semicolons, or newlines), you MUST use the compound intent. Look for multiple verbs/commands — e.g. "remove X, add Y, set Z" is three actions. Never ignore part of a multi-action message."""
 
 MORNING_SYSTEM_PROMPT = """You are a task extraction assistant. The user is listing tasks for today in response to a morning planning prompt.
 
