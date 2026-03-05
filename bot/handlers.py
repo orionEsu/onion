@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 from bot import database as db
 from bot import nlp
 from bot import formatting as fmt
+from bot.models import ParsedTask
 from bot.utils import store_undo, task_to_dict
 
 
@@ -647,6 +648,26 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
         await _add_task_and_respond(update, context, parsed)
 
 
+def _resolve_task(data: dict):
+    """Resolve a task from task_id or task_description. Returns (task, error_msg)."""
+    task_id = data.get("task_id")
+    task_desc = data.get("task_description")
+
+    if task_id:
+        task = db.get_task(int(task_id))
+        if not task:
+            return None, f"Task #{task_id} not found."
+        return task, None
+
+    if task_desc:
+        task = db.find_task_by_description(str(task_desc))
+        if not task:
+            return None, f"No pending task matching \"{escape(str(task_desc))}\"."
+        return task, None
+
+    return None, "Which task? Give me a task number or name."
+
+
 async def _route_intent(update, context, data: dict, intent: str):
     """Route all non-add_task intents from NLP."""
 
@@ -691,35 +712,27 @@ async def _route_intent(update, context, data: dict, intent: str):
             return await tasks_command(update, context)
 
     elif intent == "done":
-        task_id = data.get("task_id")
-        if not task_id:
-            await update.message.reply_text(fmt.format_error("Which task? Give me the task number."), parse_mode="HTML")
+        task, err = _resolve_task(data)
+        if err:
+            await update.message.reply_text(fmt.format_error(err), parse_mode="HTML")
             return
-        task = db.get_task(int(task_id))
-        if not task:
-            await update.message.reply_text(fmt.format_error(f"Task #{task_id} not found."), parse_mode="HTML")
-            return
-        store_undo(context, "done", int(task_id), task_to_dict(task))
-        db.update_task_status(int(task_id), "done")
+        store_undo(context, "done", task["id"], task_to_dict(task))
+        db.update_task_status(task["id"], "done")
         next_id = None
         if task["recurrence_rule"] and task["recurrence_active"]:
-            next_id = db.create_next_occurrence(int(task_id))
+            next_id = db.create_next_occurrence(task["id"])
         msg = fmt.format_task_done(task, next_id)
         msg += _remaining_today_summary()
         await update.message.reply_text(msg, parse_mode="HTML")
 
     elif intent == "delete":
-        task_id = data.get("task_id")
-        if not task_id:
-            await update.message.reply_text(fmt.format_error("Which task? Give me the task number."), parse_mode="HTML")
+        task, err = _resolve_task(data)
+        if err:
+            await update.message.reply_text(fmt.format_error(err), parse_mode="HTML")
             return
-        task = db.get_task(int(task_id))
-        if not task:
-            await update.message.reply_text(fmt.format_error(f"Task #{task_id} not found."), parse_mode="HTML")
-            return
-        store_undo(context, "delete", int(task_id), task_to_dict(task))
-        db.delete_task(int(task_id))
-        await update.message.reply_text(f"🗑️ Task #{task_id} deleted.", parse_mode="HTML")
+        store_undo(context, "delete", task["id"], task_to_dict(task))
+        db.delete_task(task["id"])
+        await update.message.reply_text(f"🗑️ Task #{task['id']} deleted.", parse_mode="HTML")
 
     elif intent == "list_labels":
         return await labels_command(update, context)
@@ -763,88 +776,71 @@ async def _route_intent(update, context, data: dict, intent: str):
         await update.message.reply_text(f"🗑️ Label <b>{escape(name)}</b> deleted.", parse_mode="HTML")
 
     elif intent == "stop_recur":
-        task_id = data.get("task_id")
-        if not task_id:
-            await update.message.reply_text(fmt.format_error("Which task?"), parse_mode="HTML")
+        task, err = _resolve_task(data)
+        if err:
+            await update.message.reply_text(fmt.format_error(err), parse_mode="HTML")
             return
-        task = db.get_task(int(task_id))
-        if not task or not task.get("recurrence_rule"):
+        if not task.get("recurrence_rule"):
             await update.message.reply_text(fmt.format_error("That's not a recurring task."), parse_mode="HTML")
             return
-        db.stop_recurrence(int(task_id))
-        await update.message.reply_text(f"🛑 Recurrence stopped for task #{task_id}.", parse_mode="HTML")
+        db.stop_recurrence(task["id"])
+        await update.message.reply_text(f"🛑 Recurrence stopped for task #{task['id']}.", parse_mode="HTML")
 
     elif intent == "view_task":
-        task_id = data.get("task_id")
-        if not task_id:
-            await update.message.reply_text(fmt.format_error("Which task? Give me the task number."), parse_mode="HTML")
+        task, err = _resolve_task(data)
+        if err:
+            await update.message.reply_text(fmt.format_error(err), parse_mode="HTML")
             return
-        task = db.get_task(int(task_id))
-        if not task:
-            await update.message.reply_text(fmt.format_error(f"Task #{task_id} not found."), parse_mode="HTML")
-            return
-        labels = db.get_labels_for_task(int(task_id))
+        labels = db.get_labels_for_task(task["id"])
         await update.message.reply_text(fmt.format_task_detail(task, labels), parse_mode="HTML")
 
     elif intent == "update_notes":
-        task_id = data.get("task_id")
+        task, err = _resolve_task(data)
+        if err:
+            await update.message.reply_text(fmt.format_error(err), parse_mode="HTML")
+            return
         notes = data.get("notes", "")
-        if not task_id:
-            await update.message.reply_text(fmt.format_error("Which task? Give me the task number."), parse_mode="HTML")
-            return
-        task = db.get_task(int(task_id))
-        if not task:
-            await update.message.reply_text(fmt.format_error(f"Task #{task_id} not found."), parse_mode="HTML")
-            return
-        db.update_task_notes(int(task_id), notes)
+        db.update_task_notes(task["id"], notes)
         await update.message.reply_text(
-            f"📎 Notes updated for task <b>#{task_id}</b>:\n<i>{escape(notes)}</i>", parse_mode="HTML",
+            f"📎 Notes updated for task <b>#{task['id']}</b>:\n<i>{escape(notes)}</i>", parse_mode="HTML",
         )
 
     elif intent == "assign_label":
-        task_id = data.get("task_id")
+        task, err = _resolve_task(data)
+        if err:
+            await update.message.reply_text(fmt.format_error(err), parse_mode="HTML")
+            return
         label_name = data.get("label_name", "")
-        if not task_id:
-            await update.message.reply_text(fmt.format_error("Which task?"), parse_mode="HTML")
-            return
-        task = db.get_task(int(task_id))
-        if not task:
-            await update.message.reply_text(fmt.format_error(f"Task #{task_id} not found."), parse_mode="HTML")
-            return
         label = db.get_label_by_name(label_name)
         if not label:
             await update.message.reply_text(fmt.format_error(f"Label '{label_name}' not found."), parse_mode="HTML")
             return
-        db.add_task_label(int(task_id), label["id"])
+        db.add_task_label(task["id"], label["id"])
         await update.message.reply_text(
-            f"🏷️ {escape(label['emoji'])} <b>{escape(label['name'])}</b> assigned to task <b>#{task_id}</b>",
+            f"🏷️ {escape(label['emoji'])} <b>{escape(label['name'])}</b> assigned to task <b>#{task['id']}</b>",
             parse_mode="HTML",
         )
 
     elif intent == "remove_label":
-        task_id = data.get("task_id")
-        label_name = data.get("label_name", "")
-        if not task_id:
-            await update.message.reply_text(fmt.format_error("Which task?"), parse_mode="HTML")
+        task, err = _resolve_task(data)
+        if err:
+            await update.message.reply_text(fmt.format_error(err), parse_mode="HTML")
             return
+        label_name = data.get("label_name", "")
         label = db.get_label_by_name(label_name)
         if not label:
             await update.message.reply_text(fmt.format_error(f"Label '{label_name}' not found."), parse_mode="HTML")
             return
-        db.remove_task_label(int(task_id), label["id"])
+        db.remove_task_label(task["id"], label["id"])
         await update.message.reply_text(
-            f"🏷️ <b>{escape(label['name'])}</b> removed from task <b>#{task_id}</b>",
+            f"🏷️ <b>{escape(label['name'])}</b> removed from task <b>#{task['id']}</b>",
             parse_mode="HTML",
         )
 
     elif intent == "edit_task":
-        task_id = data.get("task_id")
-        if not task_id:
-            await update.message.reply_text(fmt.format_error("Which task?"), parse_mode="HTML")
-            return
-        task = db.get_task(int(task_id))
-        if not task:
-            await update.message.reply_text(fmt.format_error(f"Task #{task_id} not found."), parse_mode="HTML")
+        task, err = _resolve_task(data)
+        if err:
+            await update.message.reply_text(fmt.format_error(err), parse_mode="HTML")
             return
 
         new_desc = data.get("new_description")
@@ -862,11 +858,11 @@ async def _route_intent(update, context, data: dict, intent: str):
             await update.message.reply_text(fmt.format_error("No changes specified."), parse_mode="HTML")
             return
 
-        store_undo(context, "edit", int(task_id), task_to_dict(task))
-        db.update_task(int(task_id), description=new_desc, due_date=new_date, due_time=new_time)
+        store_undo(context, "edit", task["id"], task_to_dict(task))
+        db.update_task(task["id"], description=new_desc, due_date=new_date, due_time=new_time)
         reason = data.get("reason", "edit")
         await update.message.reply_text(
-            fmt.format_task_edited(int(task_id), changes, reason=reason), parse_mode="HTML",
+            fmt.format_task_edited(task["id"], changes, reason=reason), parse_mode="HTML",
         )
 
     elif intent == "undo":
@@ -879,7 +875,31 @@ async def _route_intent(update, context, data: dict, intent: str):
         actions = data.get("actions", [])
         for action in actions:
             action_intent = action.get("intent", "unknown")
-            await _route_intent(update, context, action, action_intent)
+            if action_intent == "add_task":
+                try:
+                    due_date = action.get("due_date", "")
+                    due_time = action.get("due_time")
+                    datetime.strptime(due_date, "%Y-%m-%d")
+                    if due_time:
+                        try:
+                            datetime.strptime(due_time, "%H:%M")
+                        except (ValueError, TypeError):
+                            due_time = None
+                    parsed = ParsedTask(
+                        description=action.get("description", "").strip(),
+                        due_date=due_date,
+                        due_time=due_time,
+                        confidence=action.get("confidence", 1.0),
+                        recurrence_rule=action.get("recurrence_rule"),
+                        label_names=action.get("labels", []),
+                        notes=action.get("notes"),
+                    )
+                    if parsed.description:
+                        await _add_task_and_respond(update, context, parsed)
+                except (ValueError, TypeError):
+                    pass
+            else:
+                await _route_intent(update, context, action, action_intent)
 
     elif intent == "help":
         return await help_command(update, context)

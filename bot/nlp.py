@@ -34,12 +34,14 @@ Examples: "show my tasks", "what's on today", "upcoming tasks", "show work tasks
 "what did I complete" / "show completed tasks" / "done tasks this week" -> query_type: "history" (extract period if mentioned, default "week")
 
 3. MARK TASK DONE:
-{{ "intent": "done", "task_id": 5 }}
-Examples: "mark task 5 as done", "I finished task 5", "done with #5", "completed task 5"
+{{ "intent": "done", "task_id": 5, "task_description": null }}
+Examples: "mark task 5 as done", "I finished task 5", "done with #5", "completed task 5", "finished the groceries task"
+Use task_id if the user gives a number. Use task_description (a keyword from the task name) if they refer to a task by name.
 
 4. DELETE TASK:
-{{ "intent": "delete", "task_id": 3 }}
-Examples: "delete task 3", "remove task #3", "cancel task 3"
+{{ "intent": "delete", "task_id": 3, "task_description": null }}
+Examples: "delete task 3", "remove task #3", "cancel task 3", "delete the groceries task", "remove mechanic task"
+Use task_id if the user gives a number. Use task_description (a keyword from the task name) if they refer to a task by name.
 
 5. LIST LABELS:
 {{ "intent": "list_labels" }}
@@ -59,28 +61,28 @@ Examples: "rename church label to Faith", "change church emoji to 🙏"
 Examples: "delete church label", "remove the church label"
 
 9. STOP RECURRENCE:
-{{ "intent": "stop_recur", "task_id": 7 }}
+{{ "intent": "stop_recur", "task_id": 7, "task_description": null }}
 Examples: "stop recurring task 7", "cancel recurrence for #7"
 
 10. VIEW TASK DETAILS:
-{{ "intent": "view_task", "task_id": 5 }}
-Examples: "show task 5", "details for task #5", "what's task 5 about", "info on task 5"
+{{ "intent": "view_task", "task_id": 5, "task_description": null }}
+Examples: "show task 5", "details for task #5", "what's task 5 about", "info on task 5", "tell me about the groceries task"
 
 11. ADD/UPDATE NOTES:
-{{ "intent": "update_notes", "task_id": 5, "notes": "the new notes text" }}
+{{ "intent": "update_notes", "task_id": 5, "task_description": null, "notes": "the new notes text" }}
 Examples: "add note to task 5: bring the blue folder", "update notes for task 5 - call John first"
 
 12. ASSIGN LABEL TO TASK:
-{{ "intent": "assign_label", "task_id": 3, "label_name": "Social" }}
+{{ "intent": "assign_label", "task_id": 3, "task_description": null, "label_name": "Social" }}
 Examples: "add social label to task 3", "tag task #3 as Work", "label task 5 as Home", "attach errands label to task 2"
 
 13. REMOVE LABEL FROM TASK:
-{{ "intent": "remove_label", "task_id": 3, "label_name": "Social" }}
+{{ "intent": "remove_label", "task_id": 3, "task_description": null, "label_name": "Social" }}
 Examples: "remove social label from task 3", "untag task 3 from Work"
 
 14. EDIT TASK:
-{{ "intent": "edit_task", "task_id": 5, "new_description": null, "new_date": "YYYY-MM-DD" or null, "new_time": "HH:MM" or null, "reason": "move" or "rename" or "edit" }}
-Examples: "move task 5 to Friday", "rename task 3 to Buy milk", "change task 5 time to 3pm", "reschedule task 2 to next Monday", "carry over task 2 to tomorrow", "push task 4 to next week", "postpone task 3", "shift task 1 to evening", "bump task 6 to Monday"
+{{ "intent": "edit_task", "task_id": 5, "task_description": null, "new_description": null, "new_date": "YYYY-MM-DD" or null, "new_time": "HH:MM" or null, "reason": "move" or "rename" or "edit" }}
+Examples: "move task 5 to Friday", "rename task 3 to Buy milk", "change task 5 time to 3pm", "reschedule task 2 to next Monday", "carry over task 2 to tomorrow", "push task 4 to next week", "postpone task 3", "shift task 1 to evening", "bump task 6 to Monday", "move the groceries task to Friday"
 At least one of new_description, new_date, new_time must be non-null. Use the same date/time rules as add_task.
 "reason" reflects the user's intent: "move" for carry over/reschedule/push/postpone/shift/bump/defer/delay/move, "rename" for changing description/rename/reword, "edit" for everything else.
 
@@ -92,14 +94,14 @@ Examples: "undo", "undo that", "revert", "take that back"
 {{ "intent": "backup" }}
 Examples: "backup my data", "send me the database", "export my tasks"
 
-17. COMPOUND ACTIONS (do BOTH in one response):
+17. COMPOUND ACTIONS (multiple things in one message):
 {{ "intent": "compound", "actions": [action1, action2, ...] }}
-When the user asks to do multiple things at once (e.g. "create label Social and add it to task 3"), return a compound intent with an array of individual action objects.
-Example: "create social label and attach it to task 3" ->
-{{ "intent": "compound", "actions": [
-  {{ "intent": "add_label", "emoji": "👥", "name": "Social" }},
-  {{ "intent": "assign_label", "task_id": 3, "label_name": "Social" }}
-]}}
+When the user asks to do multiple things at once — whether on separate lines, separated by "and", or in any combined form — return a compound intent with an array of individual action objects. Each action must be a complete intent object.
+Examples:
+- "create social label and add it to task 3" -> compound with add_label + assign_label
+- "delete task 1\nadd go to the mechanic tomorrow" -> compound with delete + add_task
+- "mark task 2 done and move task 3 to Friday" -> compound with done + edit_task
+- "buy milk tomorrow and call dentist on Monday" -> compound with two add_task actions
 
 18. HELP:
 {{ "intent": "help" }}
@@ -119,7 +121,9 @@ RULES:
 - Recurrence: "every day"->"daily", "every Monday"->"weekly:monday", "every other Friday"->"biweekly:friday", "1st of every month"->"monthly:1", "Mon, Wed, Fri"->"specific:mon,wed,fri". For recurring, due_date = next occurrence.
 - Label inference: cleaning/cooking/laundry->"Home", meeting/deadline/email->"Work", gym/exercise/run->"Health", study/read/course->"Learning", buy/shop/errand->"Errands". Empty list if unsure.
 - Available labels: {labels}
-- confidence: 1.0 = very certain, lower if ambiguous."""
+- confidence: 1.0 = very certain, lower if ambiguous.
+- Task references: When the user refers to a task by number, use "task_id". When they refer by name/description (e.g. "the groceries task", "mechanic task"), use "task_description" with a keyword. Only one of task_id or task_description should be non-null.
+- Multi-line or multi-action messages: If the message contains multiple commands (on separate lines or joined by "and"/"then"), ALWAYS use the compound intent to wrap them all."""
 
 MORNING_SYSTEM_PROMPT = """You are a task extraction assistant. The user is listing tasks for today in response to a morning planning prompt.
 
@@ -240,7 +244,7 @@ async def parse_task_message(user_text: str, available_labels: list[str] | None 
         labels_str = "Home, Work, Health, Learning, Errands"
 
     try:
-        content = await _call_llm(SYSTEM_PROMPT.format(now=now, labels=labels_str), user_text)
+        content = await _call_llm(SYSTEM_PROMPT.format(now=now, labels=labels_str), user_text, max_tokens=512)
         data = _extract_json(content)
         intent = data.get("intent", "unknown")
 
