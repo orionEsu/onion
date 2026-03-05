@@ -70,10 +70,20 @@ def schedule_jobs(application: Application) -> None:
 
 
 async def check_reminders(context) -> None:
+    try:
+        await _check_reminders_inner(context)
+    except Exception:
+        logger.exception("check_reminders job failed")
+
+
+async def _check_reminders_inner(context) -> None:
     now = datetime.now(TIMEZONE)
 
     for reminder_type in ("24h", "2h"):
         tasks = db.get_tasks_needing_reminder(reminder_type, now)
+        if not tasks:
+            continue
+        labels_map = db.get_labels_for_tasks([t["id"] for t in tasks])
         for task in tasks:
             # Calculate actual time remaining
             due_dt = datetime.strptime(
@@ -92,7 +102,7 @@ async def check_reminders(context) -> None:
             else:
                 label = f"{total_minutes} minutes"
 
-            labels = db.get_labels_for_task(task["id"])
+            labels = labels_map.get(task["id"], [])
             tid = task["id"]
             keyboard = InlineKeyboardMarkup([[
                 InlineKeyboardButton("😴 1h", callback_data=f"snooze_1h_{tid}"),
@@ -110,45 +120,53 @@ async def check_reminders(context) -> None:
 
 async def end_morning_prompt_timeout(context) -> None:
     """Auto-end morning prompt after 2 hours if still active."""
-    if not context.application.bot_data.get("morning_prompt_active"):
-        return
+    try:
+        if not context.application.bot_data.get("morning_prompt_active"):
+            return
 
-    context.application.bot_data["morning_prompt_active"] = False
-    added_ids = context.application.bot_data.pop("morning_prompt_tasks", [])
+        context.application.bot_data["morning_prompt_active"] = False
+        added_ids = context.application.bot_data.pop("morning_prompt_tasks", [])
 
-    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
-    all_tasks = db.get_tasks_for_date(today)
-    added_tasks = []
-    for tid in added_ids:
-        t = db.get_task(tid)
-        if t:
-            added_tasks.append(t)
+        today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+        all_tasks = db.get_tasks_for_date(today)
+        added_tasks = []
+        for tid in added_ids:
+            t = db.get_task(tid)
+            if t:
+                added_tasks.append(t)
 
-    msg = fmt.format_morning_summary(added_tasks, all_tasks)
-    await context.bot.send_message(
-        chat_id=AUTHORIZED_USER_ID,
-        text=msg,
-        parse_mode="HTML",
-    )
+        msg = fmt.format_morning_summary(added_tasks, all_tasks)
+        await context.bot.send_message(
+            chat_id=AUTHORIZED_USER_ID,
+            text=msg,
+            parse_mode="HTML",
+        )
+    except Exception:
+        logger.exception("end_morning_prompt_timeout job failed")
 
 
 async def send_weekly_summary(context) -> None:
     """Send weekly summary on configured day."""
-    today = datetime.now(TIMEZONE)
-    start_of_week = (today - timedelta(days=6)).strftime("%Y-%m-%d")
-    end_of_week = today.strftime("%Y-%m-%d")
+    try:
+        today = datetime.now(TIMEZONE)
+        start_of_week = (today - timedelta(days=6)).strftime("%Y-%m-%d")
+        end_of_week = today.strftime("%Y-%m-%d")
 
-    stats = db.get_weekly_stats(start_of_week, end_of_week)
-    msg = fmt.format_weekly_summary(stats)
-    await context.bot.send_message(
-        chat_id=AUTHORIZED_USER_ID,
-        text=msg,
-        parse_mode="HTML",
-    )
+        stats = db.get_weekly_stats(start_of_week, end_of_week)
+        msg = fmt.format_weekly_summary(stats)
+        await context.bot.send_message(
+            chat_id=AUTHORIZED_USER_ID,
+            text=msg,
+            parse_mode="HTML",
+        )
+    except Exception:
+        logger.exception("send_weekly_summary job failed")
 
 
 async def daily_backup(context) -> None:
     """Create a local backup of the database file at midnight."""
+    import os
+    import sys
     backup_path = str(DB_PATH) + ".bak"
     try:
         src = sqlite3.connect(str(DB_PATH))
@@ -156,6 +174,9 @@ async def daily_backup(context) -> None:
         src.backup(dst)
         src.close()
         dst.close()
+        # Restrict permissions on Linux/macOS (owner read/write only)
+        if sys.platform != "win32":
+            os.chmod(backup_path, 0o600)
         logger.info("Daily backup created: %s", backup_path)
     except Exception as e:
         logger.error("Daily backup failed: %s", e)

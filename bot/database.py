@@ -30,7 +30,6 @@ DAY_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6,
 def _conn():
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys = ON")
     try:
         yield conn
@@ -44,6 +43,7 @@ def _conn():
 
 def init_db() -> None:
     with _conn() as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SCHEMA)
 
         # --- Migrations ---
@@ -78,12 +78,47 @@ def init_db() -> None:
             FOREIGN KEY (label_id) REFERENCES labels(id) ON DELETE CASCADE
         )""")
 
+        # Indexes for common queries
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_date_status ON tasks(due_date, status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_task_labels_label ON task_labels(label_id)")
+
+
+def _validate_recurrence_rule(rule: str | None) -> str | None:
+    """Validate and return the rule, or None if invalid."""
+    if not rule:
+        return None
+    if rule == "daily":
+        return rule
+    if rule.startswith("every_n_days:"):
+        try:
+            n = int(rule.split(":", 1)[1])
+            return rule if n >= 1 else None
+        except ValueError:
+            return None
+    if rule.startswith("weekly:") or rule.startswith("biweekly:"):
+        day = rule.split(":", 1)[1].lower()
+        return rule if day in DAY_MAP else None
+    if rule.startswith("monthly:"):
+        try:
+            d = int(rule.split(":", 1)[1])
+            return rule if 1 <= d <= 31 else None
+        except ValueError:
+            return None
+    if rule.startswith("specific:"):
+        days = rule.split(":", 1)[1].split(",")
+        valid = [d.strip().lower() for d in days if d.strip().lower() in DAY_MAP]
+        return rule if valid else None
+    return None
+
 
 # ── Task CRUD ──────────────────────────────────────────────────────
 
 def add_task(description: str, due_date: str, due_time: str | None,
              recurrence_rule: str | None = None, parent_task_id: int | None = None,
              notes: str | None = None) -> int:
+    recurrence_rule = _validate_recurrence_rule(recurrence_rule)
     now = datetime.now(TIMEZONE).isoformat()
     active = 1 if recurrence_rule else 0
     with _conn() as conn:
@@ -265,18 +300,31 @@ def reinsert_task(task_data: dict) -> int:
 
 
 def clear_tasks(scope: str) -> int:
-    """Delete tasks by scope: 'today', 'upcoming', or 'all'. Returns count of deleted tasks."""
+    """Delete tasks/labels by scope. Returns count of deleted items."""
     today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
     with _conn() as conn:
         if scope == "today":
             cur = conn.execute("DELETE FROM tasks WHERE due_date = ? AND status = 'pending'", (today,))
+            return cur.rowcount
         elif scope == "upcoming":
             cur = conn.execute("DELETE FROM tasks WHERE due_date >= ? AND status = 'pending'", (today,))
-        elif scope == "all":
+            return cur.rowcount
+        elif scope == "all_tasks":
             cur = conn.execute("DELETE FROM tasks")
+            conn.execute("DELETE FROM sqlite_sequence WHERE name='tasks'")
+            return cur.rowcount
+        elif scope == "all_labels":
+            cur = conn.execute("DELETE FROM labels")
+            conn.execute("DELETE FROM task_labels")
+            return cur.rowcount
+        elif scope == "everything":
+            t = conn.execute("DELETE FROM tasks").rowcount
+            l = conn.execute("DELETE FROM labels").rowcount
+            conn.execute("DELETE FROM task_labels")
+            conn.execute("DELETE FROM sqlite_sequence WHERE name='tasks'")
+            return t + l
         else:
             return 0
-        return cur.rowcount
 
 
 def find_tasks_by_description(query: str) -> list[sqlite3.Row]:
@@ -411,16 +459,13 @@ def create_next_occurrence(task_id: int) -> int | None:
         notes=task["notes"],
     )
 
-    # Copy labels from the original task
+    # Copy labels from the original task in one query
     with _conn() as conn:
-        labels = conn.execute(
-            "SELECT label_id FROM task_labels WHERE task_id = ?", (task_id,)
-        ).fetchall()
-        for lbl in labels:
-            conn.execute(
-                "INSERT OR IGNORE INTO task_labels (task_id, label_id) VALUES (?, ?)",
-                (new_id, lbl["label_id"]),
-            )
+        conn.execute(
+            "INSERT OR IGNORE INTO task_labels (task_id, label_id) "
+            "SELECT ?, label_id FROM task_labels WHERE task_id = ?",
+            (new_id, task_id),
+        )
 
     return new_id
 
@@ -541,15 +586,12 @@ def generate_recurring_for_today() -> list[int]:
                 )
                 new_id = cur.lastrowid
 
-                # Copy labels within the same connection
-                labels = conn.execute(
-                    "SELECT label_id FROM task_labels WHERE task_id = ?", (task["id"],)
-                ).fetchall()
-                for lbl in labels:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO task_labels (task_id, label_id) VALUES (?, ?)",
-                        (new_id, lbl["label_id"]),
-                    )
+                # Copy labels in one query
+                conn.execute(
+                    "INSERT OR IGNORE INTO task_labels (task_id, label_id) "
+                    "SELECT ?, label_id FROM task_labels WHERE task_id = ?",
+                    (new_id, task["id"]),
+                )
                 created_ids.append(new_id)
 
     return created_ids

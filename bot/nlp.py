@@ -95,9 +95,9 @@ Examples: "undo", "undo that", "revert", "take that back"
 Examples: "backup my data", "send me the database", "export my tasks"
 
 17. CLEAR TASKS:
-{{ "intent": "clear", "scope": "today" or "upcoming" or "all" }}
-Examples: "clear today's tasks", "clear all upcoming tasks", "wipe everything", "delete all tasks", "clear all my tasks", "remove all today's tasks"
-"today" = only today's pending tasks. "upcoming" = all pending tasks from today onwards. "all" = every task in the system including completed.
+{{ "intent": "clear", "scope": "today" or "upcoming" or "all_tasks" or "all_labels" or "everything" or "ask" }}
+Examples: "clear today's tasks" -> scope "today". "clear all upcoming tasks" -> scope "upcoming". "clear all tasks"/"delete all tasks"/"wipe all tasks" -> scope "all_tasks". "clear all labels"/"delete all labels" -> scope "all_labels". "wipe everything"/"clear everything"/"nuke it all" -> scope "everything". "clear all"/"clear" (ambiguous, no specific target) -> scope "ask".
+"today" = only today's pending tasks. "upcoming" = all pending tasks from today onwards. "all_tasks" = every task including completed. "all_labels" = all labels. "everything" = tasks AND labels. "ask" = user said "clear all" or just "clear" without specifying what — ask them.
 
 18. COMPOUND ACTIONS (multiple things in one message):
 {{ "intent": "compound", "actions": [action1, action2, ...] }}

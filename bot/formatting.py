@@ -69,7 +69,16 @@ def _humanize_rule(rule: str) -> str:
         return f"every other {day}"
     if rule.startswith("monthly:"):
         day = rule.split(":", 1)[1]
-        return f"monthly on the {day}th"
+        d = int(day)
+        if d % 10 == 1 and d != 11:
+            suffix = "st"
+        elif d % 10 == 2 and d != 12:
+            suffix = "nd"
+        elif d % 10 == 3 and d != 13:
+            suffix = "rd"
+        else:
+            suffix = "th"
+        return f"monthly on the {d}{suffix}"
     if rule.startswith("specific:"):
         days = rule.split(":", 1)[1]
         day_names = [d.strip().capitalize() for d in days.split(",")]
@@ -189,7 +198,7 @@ def format_task_added(task_id: int, description: str, due_date: str,
         notes_str = f"\n📎 <i>{escape(notes)}</i>"
 
     return (
-        f"✅ <b>Task #{task_id} added!</b>\n\n"
+        f"✅ <b>Added!</b>\n\n"
         f"📝 {desc}\n"
         f"📅 {_humanize_date(due_date)}{time_str}"
         f"{recur_str}{label_str}{notes_str}"
@@ -212,8 +221,7 @@ def format_task_detail(task, labels: list | None = None) -> str:
     notes_str = f"\n\n📎 <b>Notes:</b>\n<i>{escape(notes)}</i>" if notes else "\n\n📎 <i>No notes</i>"
 
     return (
-        f"{status_icon} <b>Task #{task['id']}</b>\n\n"
-        f"📝 {desc}\n"
+        f"{status_icon} <b>{desc}</b>\n\n"
         f"📅 {_humanize_date(task['due_date'])}{time_str}\n"
         f"📊 Status: {task['status']}"
         f"{recur}{label_str}{notes_str}"
@@ -222,9 +230,11 @@ def format_task_detail(task, labels: list | None = None) -> str:
 
 def format_task_done(task, next_task_id: int | None = None) -> str:
     desc = escape(task["description"])
-    msg = f"🎉 <b>Task #{task['id']} done!</b>\n✅ <s>{desc}</s>"
+    msg = f"🎉 <b>Done!</b> ✅ <s>{desc}</s>"
     if next_task_id:
-        msg += f"\n\n🔄 Next occurrence → <b>Task #{next_task_id}</b>"
+        next_task = None
+        # next_task_id info will be appended by caller if needed
+        msg += f"\n\n🔄 Next occurrence scheduled"
     return msg
 
 
@@ -284,8 +294,9 @@ def format_labels_list(labels: list) -> str:
     return "\n".join(lines)
 
 
-def format_label_prompt(task_id: int) -> str:
-    return f"🏷️ <b>Pick labels for task #{task_id}</b>\n<i>Tap to assign, then tap ✅ Done</i>"
+def format_label_prompt(task_id: int, description: str | None = None) -> str:
+    name = f"\"{escape(description)}\"" if description else f"task #{task_id}"
+    return f"🏷️ <b>Pick labels for {name}</b>\n<i>Tap to assign, then tap ✅ Done</i>"
 
 
 # ── Help & Start ──────────────────────────────────────────────────
@@ -338,21 +349,23 @@ def format_help() -> str:
 
 # ── Edit ──────────────────────────────────────────────────────────
 
-def format_task_edited(task_id: int, changes: dict, reason: str = "edit") -> str:
+def format_task_edited(task_id: int, changes: dict, reason: str = "edit",
+                       task_description: str | None = None) -> str:
+    name = f"\"{escape(task_description)}\"" if task_description else f"Task #{task_id}"
     parts = []
     if "description" in changes:
-        parts.append(f"  📝 Description → {escape(changes['description'])}")
+        parts.append(f"  ✏️ New name → {escape(changes['description'])}")
     if "due_date" in changes:
         parts.append(f"  📅 Date → {_humanize_date(changes['due_date'])}")
     if "due_time" in changes:
         parts.append(f"  ⏰ Time → {changes['due_time']}")
 
     if reason == "move":
-        header = f"📦 <b>Task #{task_id} moved!</b>"
+        header = f"📦 <b>{name}</b> moved!"
     elif reason == "rename":
-        header = f"📝 <b>Task #{task_id} renamed!</b>"
+        header = f"📝 <b>{name}</b> renamed!"
     else:
-        header = f"✏️ <b>Task #{task_id} updated!</b>"
+        header = f"✏️ <b>{name}</b> updated!"
 
     return header + "\n\n" + "\n".join(parts)
 
@@ -448,7 +461,7 @@ def format_disambiguate(tasks: list) -> str:
     """Ask the user to pick from multiple matching tasks."""
     lines = ["🤔 <b>Multiple tasks match. Which one?</b>\n"]
     for t in tasks:
-        time_str = f" at {t['due_time']}" if t.get("due_time") else ""
+        time_str = f" at {t['due_time']}" if _safe_get(t, "due_time") else ""
         lines.append(f"  <b>#{t['id']}</b> — {escape(t['description'])}{time_str} — {_humanize_date(t['due_date'])}")
     lines.append("\n<i>Reply with the task number, e.g. \"task 3\"</i>")
     return "\n".join(lines)

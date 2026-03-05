@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -9,77 +10,85 @@ from bot import formatting as fmt
 from bot import nlp
 from bot.utils import store_undo, task_to_dict
 
+logger = logging.getLogger(__name__)
+
 
 async def send_morning_prompt(context: ContextTypes.DEFAULT_TYPE):
     """Scheduled at 7 AM. Sends varied greeting + fun fact + existing tasks."""
-    # Auto-generate today's recurring task instances
-    db.generate_recurring_for_today()
+    try:
+        # Auto-generate today's recurring task instances
+        db.generate_recurring_for_today()
 
-    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
-    existing = db.get_tasks_for_date(today)
+        today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+        existing = db.get_tasks_for_date(today)
 
-    fun_fact = await nlp.generate_fun_fact()
-    msg = fmt.format_morning_prompt(fun_fact)
+        fun_fact = await nlp.generate_fun_fact()
+        msg = fmt.format_morning_prompt(fun_fact)
 
-    if existing:
-        labels_map = db.get_labels_for_tasks([t["id"] for t in existing])
-        text, _ = fmt.format_task_list("📋 <b>Already on your plate</b>", existing, labels_map)
-        msg += "\n\n" + text
+        if existing:
+            labels_map = db.get_labels_for_tasks([t["id"] for t in existing])
+            text, _ = fmt.format_task_list("📋 <b>Already on your plate</b>", existing, labels_map)
+            msg += "\n\n" + text
 
-    # Show overdue tasks if any
-    overdue = db.get_overdue_tasks()
-    if overdue:
-        overdue_labels = db.get_labels_for_tasks([t["id"] for t in overdue])
-        msg += "\n\n" + fmt.format_overdue_warning(overdue, overdue_labels)
+        # Show overdue tasks if any
+        overdue = db.get_overdue_tasks()
+        if overdue:
+            overdue_labels = db.get_labels_for_tasks([t["id"] for t in overdue])
+            msg += "\n\n" + fmt.format_overdue_warning(overdue, overdue_labels)
 
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ I'm done adding", callback_data="morning_done"),
-    ]])
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ I'm done adding", callback_data="morning_done"),
+        ]])
 
-    await context.bot.send_message(
-        chat_id=AUTHORIZED_USER_ID,
-        text=msg,
-        parse_mode="HTML",
-        reply_markup=keyboard,
-    )
+        await context.bot.send_message(
+            chat_id=AUTHORIZED_USER_ID,
+            text=msg,
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
 
-    context.application.bot_data["morning_prompt_active"] = True
-    context.application.bot_data["morning_prompt_tasks"] = []
+        context.application.bot_data["morning_prompt_active"] = True
+        context.application.bot_data["morning_prompt_tasks"] = []
+    except Exception:
+        logger.exception("send_morning_prompt job failed")
 
 
 async def send_daily_review(context: ContextTypes.DEFAULT_TYPE):
     """Scheduled at 9 PM. Sends review with inline buttons."""
-    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
-    tasks = db.get_unreviewed_tasks_for_date(today)
+    try:
+        today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+        tasks = db.get_unreviewed_tasks_for_date(today)
 
-    if not tasks:
+        if not tasks:
+            await context.bot.send_message(
+                chat_id=AUTHORIZED_USER_ID,
+                text=fmt.format_no_tasks_review(),
+                parse_mode="HTML",
+            )
+            return
+
         await context.bot.send_message(
             chat_id=AUTHORIZED_USER_ID,
-            text=fmt.format_no_tasks_review(),
+            text=fmt.format_daily_review_header(),
             parse_mode="HTML",
         )
-        return
 
-    await context.bot.send_message(
-        chat_id=AUTHORIZED_USER_ID,
-        text=fmt.format_daily_review_header(),
-        parse_mode="HTML",
-    )
-
-    labels_map = db.get_labels_for_tasks([t["id"] for t in tasks])
-    for task in tasks:
-        tid = task["id"]
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("✅ Done", callback_data=f"review_done_{tid}"),
-            InlineKeyboardButton("❌ Not done", callback_data=f"review_undone_{tid}"),
-        ]])
-        await context.bot.send_message(
-            chat_id=AUTHORIZED_USER_ID,
-            text=fmt.format_review_task(task, labels_map.get(tid, [])),
-            parse_mode="HTML",
-            reply_markup=keyboard,
-        )
-        db.mark_reviewed(tid)
+        labels_map = db.get_labels_for_tasks([t["id"] for t in tasks])
+        for task in tasks:
+            tid = task["id"]
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Done", callback_data=f"review_done_{tid}"),
+                InlineKeyboardButton("❌ Not done", callback_data=f"review_undone_{tid}"),
+            ]])
+            await context.bot.send_message(
+                chat_id=AUTHORIZED_USER_ID,
+                text=fmt.format_review_task(task, labels_map.get(tid, [])),
+                parse_mode="HTML",
+                reply_markup=keyboard,
+            )
+            db.mark_reviewed(tid)
+    except Exception:
+        logger.exception("send_daily_review job failed")
 
 
 def _parse_int(s: str) -> int | None:
@@ -233,7 +242,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Past-time task callbacks ──
 
-    elif data in ("past_task_tomorrow", "past_task_keep", "past_task_cancel"):
+    elif data in ("past_task_tomorrow", "past_task_cancel"):
         parsed = context.user_data.pop("pending_past_task", None)
         if not parsed:
             await query.edit_message_text("⏰ No pending task.", parse_mode="HTML")
@@ -246,6 +255,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data == "past_task_tomorrow":
             tomorrow = (datetime.now(TIMEZONE) + timedelta(days=1)).strftime("%Y-%m-%d")
             parsed.due_date = tomorrow
+            parsed.due_time = None  # Clear past time when moving to tomorrow
 
         task_id = db.add_task(
             parsed.description, parsed.due_date, parsed.due_time,
@@ -362,12 +372,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("clear_confirm_"):
         scope = data.removeprefix("clear_confirm_")
-        if scope not in ("today", "upcoming", "all"):
+        valid = ("today", "upcoming", "all_tasks", "all_labels", "everything")
+        if scope not in valid:
             return
         count = db.clear_tasks(scope)
-        labels = {"today": "today's", "upcoming": "upcoming", "all": "all"}
+        scope_labels = {
+            "today": "today's", "upcoming": "upcoming",
+            "all_tasks": "all", "all_labels": "all",
+            "everything": "all",
+        }
+        item = "item(s)" if scope in ("everything",) else (
+            "label(s)" if scope == "all_labels" else "task(s)"
+        )
         await query.edit_message_text(
-            f"🧹 <b>Cleared {count} {labels[scope]} task(s).</b>", parse_mode="HTML",
+            f"🧹 <b>Cleared {count} {scope_labels[scope]} {item}.</b>", parse_mode="HTML",
         )
 
     elif data == "clear_cancel":

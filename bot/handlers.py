@@ -1,5 +1,6 @@
 import functools
 import logging
+import sqlite3
 from datetime import datetime, timedelta
 from html import escape
 
@@ -46,7 +47,7 @@ def _remaining_today_summary(context=None) -> str:
         return "\n\n🎉 <i>All done for today!</i>"
     labels_map = _build_labels_map(remaining)
     text, pos_map = fmt.format_task_list(
-        f"📋 <b>Remaining ({len(remaining)})</b>", remaining, labels_map,
+        f"📋 <b>Remaining for today ({len(remaining)})</b>", remaining, labels_map,
     )
     if context:
         _store_pos_map(context, pos_map)
@@ -88,14 +89,31 @@ async def _assign_labels_from_names(task_id: int, label_names: list[str]) -> lis
     return assigned
 
 
+def _parse_user_time(text: str) -> str | None:
+    """Parse a casual time string like '10pm', '3:30pm', '23:00', '9 am' into HH:MM format."""
+    import re
+    text = text.strip().lower().replace(" ", "")
+    # Match patterns: 10pm, 3:30pm, 23:00, 9am, 10:00
+    m = re.match(r'^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$', text)
+    if not m:
+        return None
+    hour = int(m.group(1))
+    minute = int(m.group(2)) if m.group(2) else 0
+    period = m.group(3)
+    if period == "pm" and hour < 12:
+        hour += 12
+    elif period == "am" and hour == 12:
+        hour = 0
+    if hour > 23 or minute > 59:
+        return None
+    return f"{hour:02d}:{minute:02d}"
+
+
 def _is_past_time(due_date: str, due_time: str | None) -> bool:
     """Check if a task's date+time is already in the past."""
     if not due_time:
         return False
     now = datetime.now(TIMEZONE)
-    today = now.strftime("%Y-%m-%d")
-    if due_date != today:
-        return False
     try:
         task_dt = datetime.strptime(f"{due_date} {due_time}", "%Y-%m-%d %H:%M").replace(tzinfo=TIMEZONE)
         return task_dt < now
@@ -107,17 +125,15 @@ async def _add_task_and_respond(update, context, parsed):
     """Add a task from ParsedTask and send styled response + label prompt."""
     # Check if time is already past
     if _is_past_time(parsed.due_date, parsed.due_time):
-        tomorrow = (datetime.now(TIMEZONE) + timedelta(days=1)).strftime("%Y-%m-%d")
         context.user_data["pending_past_task"] = parsed
         keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("📅 Move to tomorrow", callback_data=f"past_task_tomorrow"),
-            InlineKeyboardButton("✅ Keep today", callback_data=f"past_task_keep"),
-            InlineKeyboardButton("❌ Cancel", callback_data=f"past_task_cancel"),
+            InlineKeyboardButton("📅 Move to tomorrow", callback_data="past_task_tomorrow"),
+            InlineKeyboardButton("❌ Cancel", callback_data="past_task_cancel"),
         ]])
         await update.message.reply_text(
             f"⏰ <b>Heads up!</b> {parsed.due_time} today has already passed.\n\n"
             f"📝 \"{escape(parsed.description)}\"\n\n"
-            f"Move it to <b>tomorrow ({tomorrow})</b>, keep it for today, or cancel?",
+            f"Reply with a new time (e.g. <b>10pm</b>, <b>23:00</b>) or tap a button.",
             parse_mode="HTML",
             reply_markup=keyboard,
         )
@@ -142,7 +158,7 @@ async def _add_task_and_respond(update, context, parsed):
     if not labels:
         keyboard = _build_label_keyboard(task_id)
         await update.message.reply_text(
-            fmt.format_label_prompt(task_id),
+            fmt.format_label_prompt(task_id, parsed.description),
             parse_mode="HTML",
             reply_markup=keyboard,
         )
@@ -198,7 +214,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Prompt for labels
     keyboard = _build_label_keyboard(task_id)
     await update.message.reply_text(
-        fmt.format_label_prompt(task_id), parse_mode="HTML", reply_markup=keyboard,
+        fmt.format_label_prompt(task_id, description), parse_mode="HTML", reply_markup=keyboard,
     )
 
 
@@ -248,6 +264,7 @@ async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(fmt.format_error(f"Task #{task_id} not found."), parse_mode="HTML")
         return
 
+    task_date = task["due_date"]
     store_undo(context, "done", task_id, task_to_dict(task))
     db.update_task_status(task_id, "done")
 
@@ -257,7 +274,9 @@ async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         next_id = db.create_next_occurrence(task_id)
 
     msg = fmt.format_task_done(task, next_id)
-    msg += _remaining_today_summary(context)
+    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+    if task_date == today:
+        msg += _remaining_today_summary(context)
     await update.message.reply_text(msg, parse_mode="HTML")
 
 
@@ -278,10 +297,13 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(fmt.format_error(f"Task #{task_id} not found."), parse_mode="HTML")
         return
 
+    task_date = task["due_date"]
     store_undo(context, "delete", task_id, task_to_dict(task))
     db.delete_task(task_id)
-    msg = f"🗑️ Task #{task_id} deleted."
-    msg += _remaining_today_summary(context)
+    msg = f"🗑️ <b>Deleted:</b> \"{escape(task['description'])}\""
+    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+    if task_date == today:
+        msg += _remaining_today_summary(context)
     await update.message.reply_text(msg, parse_mode="HTML")
 
 
@@ -348,7 +370,7 @@ async def newlabel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🏷️ Label created: {escape(emoji)} <b>{escape(name)}</b> (id: {label_id})",
             parse_mode="HTML",
         )
-    except Exception:
+    except sqlite3.IntegrityError:
         await update.message.reply_text(
             fmt.format_error(f"Label '{name}' already exists."), parse_mode="HTML",
         )
@@ -479,7 +501,10 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                    description=changes.get("description"),
                    due_date=changes.get("due_date"),
                    due_time=changes.get("due_time"))
-    await update.message.reply_text(fmt.format_task_edited(task_id, changes), parse_mode="HTML")
+    await update.message.reply_text(
+        fmt.format_task_edited(task_id, changes, task_description=task["description"]),
+        parse_mode="HTML",
+    )
 
 
 @authorized
@@ -573,6 +598,7 @@ async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from bot.config import DB_PATH
 
     import os
+    import sys
     filename = f"tasks_backup_{datetime.now(TIMEZONE).strftime('%Y-%m-%d')}.db"
     tmp_path = None
     try:
@@ -585,6 +611,8 @@ async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         src.backup(dst)
         src.close()
         dst.close()
+        if sys.platform != "win32":
+            os.chmod(tmp_path, 0o600)
 
         with open(tmp_path, "rb") as f:
             await context.bot.send_document(
@@ -600,34 +628,91 @@ async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.unlink(tmp_path)
 
 
-VALID_CLEAR_SCOPES = {"today", "upcoming", "all"}
+VALID_CLEAR_SCOPES = {"today", "upcoming", "all_tasks", "all_labels", "everything"}
 
-@authorized
-async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    args = context.args
-    scope = args[0].lower() if args else ""
-    if scope not in VALID_CLEAR_SCOPES:
-        await update.message.reply_text(
-            fmt.format_error("Usage: /clear <today|upcoming|all>"), parse_mode="HTML",
+CLEAR_LABELS = {
+    "today": "today's pending tasks",
+    "upcoming": "all upcoming tasks",
+    "all_tasks": "ALL tasks (including completed)",
+    "all_labels": "ALL labels",
+    "everything": "ALL tasks AND labels",
+}
+
+
+def _build_clear_ask_keyboard() -> InlineKeyboardMarkup:
+    """Build keyboard asking what to clear."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📋 Today's tasks", callback_data="clear_confirm_today"),
+            InlineKeyboardButton("📅 Upcoming tasks", callback_data="clear_confirm_upcoming"),
+        ],
+        [
+            InlineKeyboardButton("🗑️ All tasks", callback_data="clear_confirm_all_tasks"),
+            InlineKeyboardButton("🏷️ All labels", callback_data="clear_confirm_all_labels"),
+        ],
+        [
+            InlineKeyboardButton("💣 Everything", callback_data="clear_confirm_everything"),
+            InlineKeyboardButton("❌ Cancel", callback_data="clear_cancel"),
+        ],
+    ])
+
+
+async def _send_clear_confirmation(message, scope: str):
+    """Send the appropriate clear confirmation for a given scope."""
+    if scope == "ask" or scope not in CLEAR_LABELS:
+        await message.reply_text(
+            "🧹 <b>What do you want to clear?</b>",
+            parse_mode="HTML",
+            reply_markup=_build_clear_ask_keyboard(),
         )
         return
 
-    labels = {"today": "today's pending tasks", "upcoming": "all upcoming tasks", "all": "ALL tasks (including completed)"}
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("Yes, clear them", callback_data=f"clear_confirm_{scope}"),
         InlineKeyboardButton("Cancel", callback_data="clear_cancel"),
     ]])
-    await update.message.reply_text(
-        f"⚠️ <b>Are you sure?</b>\n\nThis will permanently delete <b>{labels[scope]}</b>.",
+    await message.reply_text(
+        f"⚠️ <b>Are you sure?</b>\n\nThis will permanently delete <b>{CLEAR_LABELS[scope]}</b>.",
         parse_mode="HTML",
         reply_markup=keyboard,
     )
+
+
+@authorized
+async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    scope = args[0].lower() if args else "ask"
+    # Map legacy "all" from /clear command to "all_tasks"
+    if scope == "all":
+        scope = "all_tasks"
+    await _send_clear_confirmation(update.message, scope)
 
 
 # ── Natural language handler ─────────────────────────────────────
 
 @authorized
 async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Check if user is replying with a new time for a past-time task
+    if context.user_data.get("pending_past_task"):
+        parsed = context.user_data.get("pending_past_task")
+        text = (update.message.text or "").strip()
+        # Try to parse as a time (e.g. "10pm", "23:00", "3:30pm")
+        new_time = _parse_user_time(text)
+        if new_time:
+            parsed.due_time = new_time
+            # Check if the new time is also in the past
+            if _is_past_time(parsed.due_date, new_time):
+                await update.message.reply_text(
+                    f"⏰ <b>{new_time}</b> has also passed. Try a later time or tap a button.",
+                    parse_mode="HTML",
+                )
+                return
+            context.user_data.pop("pending_past_task", None)
+            await _add_task_and_respond(update, context, parsed)
+            return
+        # If not a time, fall through to normal NLP (don't consume the message)
+        context.user_data.pop("pending_past_task", None)
+
     # Check if we're awaiting a carryover date
     if context.user_data.get("awaiting_carry_date"):
         task_id = context.user_data.pop("awaiting_carry_date")
@@ -812,23 +897,29 @@ async def _route_intent(update, context, data: dict, intent: str):
         task = await _resolve_or_ask(update, data, context)
         if not task:
             return
+        task_date = task["due_date"]
         store_undo(context, "done", task["id"], task_to_dict(task))
         db.update_task_status(task["id"], "done")
         next_id = None
         if task["recurrence_rule"] and task["recurrence_active"]:
             next_id = db.create_next_occurrence(task["id"])
         msg = fmt.format_task_done(task, next_id)
-        msg += _remaining_today_summary(context)
+        today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+        if task_date == today:
+            msg += _remaining_today_summary(context)
         await update.message.reply_text(msg, parse_mode="HTML")
 
     elif intent == "delete":
         task = await _resolve_or_ask(update, data, context)
         if not task:
             return
+        task_date = task["due_date"]
         store_undo(context, "delete", task["id"], task_to_dict(task))
         db.delete_task(task["id"])
-        msg = f"🗑️ Task #{task['id']} deleted."
-        msg += _remaining_today_summary(context)
+        msg = f"🗑️ <b>Deleted:</b> \"{escape(task['description'])}\""
+        today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+        if task_date == today:
+            msg += _remaining_today_summary(context)
         await update.message.reply_text(msg, parse_mode="HTML")
 
     elif intent == "list_labels":
@@ -845,7 +936,7 @@ async def _route_intent(update, context, data: dict, intent: str):
             await update.message.reply_text(
                 f"🏷️ Label created: {escape(emoji)} <b>{escape(name)}</b> (id: {label_id})", parse_mode="HTML",
             )
-        except Exception:
+        except sqlite3.IntegrityError:
             await update.message.reply_text(fmt.format_error(f"Label '{name}' already exists."), parse_mode="HTML")
 
     elif intent == "edit_label":
@@ -876,11 +967,13 @@ async def _route_intent(update, context, data: dict, intent: str):
         task = await _resolve_or_ask(update, data, context)
         if not task:
             return
-        if not task.get("recurrence_rule"):
+        if not task["recurrence_rule"]:
             await update.message.reply_text(fmt.format_error("That's not a recurring task."), parse_mode="HTML")
             return
         db.stop_recurrence(task["id"])
-        await update.message.reply_text(f"🛑 Recurrence stopped for task #{task['id']}.", parse_mode="HTML")
+        await update.message.reply_text(
+            f"🛑 Recurrence stopped for \"{escape(task['description'])}\".", parse_mode="HTML",
+        )
 
     elif intent == "view_task":
         task = await _resolve_or_ask(update, data, context)
@@ -896,7 +989,7 @@ async def _route_intent(update, context, data: dict, intent: str):
         notes = data.get("notes", "")
         db.update_task_notes(task["id"], notes)
         await update.message.reply_text(
-            f"📎 Notes updated for task <b>#{task['id']}</b>:\n<i>{escape(notes)}</i>", parse_mode="HTML",
+            f"📎 Notes updated for \"{escape(task['description'])}\":\n<i>{escape(notes)}</i>", parse_mode="HTML",
         )
 
     elif intent == "assign_label":
@@ -910,7 +1003,7 @@ async def _route_intent(update, context, data: dict, intent: str):
             return
         db.add_task_label(task["id"], label["id"])
         await update.message.reply_text(
-            f"🏷️ {escape(label['emoji'])} <b>{escape(label['name'])}</b> assigned to task <b>#{task['id']}</b>",
+            f"🏷️ {escape(label['emoji'])} <b>{escape(label['name'])}</b> → \"{escape(task['description'])}\"",
             parse_mode="HTML",
         )
 
@@ -925,7 +1018,7 @@ async def _route_intent(update, context, data: dict, intent: str):
             return
         db.remove_task_label(task["id"], label["id"])
         await update.message.reply_text(
-            f"🏷️ <b>{escape(label['name'])}</b> removed from task <b>#{task['id']}</b>",
+            f"🏷️ <b>{escape(label['name'])}</b> removed from \"{escape(task['description'])}\"",
             parse_mode="HTML",
         )
 
@@ -953,27 +1046,17 @@ async def _route_intent(update, context, data: dict, intent: str):
         db.update_task(task["id"], description=new_desc, due_date=new_date, due_time=new_time)
         reason = data.get("reason", "edit")
         await update.message.reply_text(
-            fmt.format_task_edited(task["id"], changes, reason=reason), parse_mode="HTML",
+            fmt.format_task_edited(task["id"], changes, reason=reason,
+                                   task_description=task["description"]),
+            parse_mode="HTML",
         )
 
     elif intent == "clear":
-        scope = data.get("scope", "")
-        if scope not in VALID_CLEAR_SCOPES:
-            await update.message.reply_text(
-                fmt.format_error("Clear what? Say \"clear today\", \"clear upcoming\", or \"clear all\"."),
-                parse_mode="HTML",
-            )
-            return
-        labels = {"today": "today's pending tasks", "upcoming": "all upcoming tasks", "all": "ALL tasks (including completed)"}
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("Yes, clear them", callback_data=f"clear_confirm_{scope}"),
-            InlineKeyboardButton("Cancel", callback_data="clear_cancel"),
-        ]])
-        await update.message.reply_text(
-            f"⚠️ <b>Are you sure?</b>\n\nThis will permanently delete <b>{labels[scope]}</b>.",
-            parse_mode="HTML",
-            reply_markup=keyboard,
-        )
+        scope = data.get("scope", "ask")
+        # Map legacy "all" to "all_tasks"
+        if scope == "all":
+            scope = "all_tasks"
+        await _send_clear_confirmation(update.message, scope)
 
     elif intent == "undo":
         return await undo_command(update, context)
