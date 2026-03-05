@@ -1,0 +1,409 @@
+"""Styled HTML message formatting with emojis for all bot outputs."""
+
+import random
+from datetime import datetime
+from html import escape
+
+from bot.config import TIMEZONE
+
+# ── Morning greetings (rotated) ───────────────────────────────────
+
+MORNING_GREETINGS = [
+    "☀️ <b>Rise and shine!</b> A new day, a new chance to crush it.",
+    "🌅 <b>Good morning!</b> The world is yours today.",
+    "☕ <b>Morning!</b> Coffee's calling and so is productivity.",
+    "🚀 <b>New day loading...</b> What quests are we taking on?",
+    "🌤️ <b>Top of the morning!</b> Let's make today count.",
+    "💪 <b>Wakey wakey!</b> Time to be legendary.",
+    "🌻 <b>Hello sunshine!</b> What's the game plan?",
+    "⭐ <b>A fresh start!</b> Yesterday is gone, today is yours.",
+    "🎯 <b>Good morning!</b> Let's aim high today.",
+    "🔥 <b>Let's gooo!</b> Another day to make moves.",
+    "🌈 <b>Rise up!</b> Great things await.",
+    "📍 <b>Morning check-in!</b> Ready to own this day?",
+    "✨ <b>Hey there, superstar!</b> What's on the agenda?",
+    "🎶 <b>Good morning!</b> Time to set the rhythm for the day.",
+    "🧭 <b>New day, new direction!</b> Where are we headed?",
+]
+
+
+def format_morning_prompt(fun_fact: str) -> str:
+    greeting = random.choice(MORNING_GREETINGS)
+    # Limit fun fact length to prevent oversized messages
+    if len(fun_fact) > 300:
+        fun_fact = fun_fact[:297] + "..."
+    return (
+        f"{greeting}\n\n"
+        f"💡 <b>Fun fact:</b> <i>{escape(fun_fact)}</i>\n\n"
+        f"📝 <b>What are you up to today?</b>\n"
+        f"<i>Send me your tasks and I'll add them. Tap the button when you're done.</i>"
+    )
+
+
+def format_morning_summary(tasks_added: list, all_tasks: list) -> str:
+    lines = [f"📊 <b>Morning Planning Done!</b>\n"]
+    if tasks_added:
+        lines.append(f"✅ Added <b>{len(tasks_added)}</b> new task(s)")
+    lines.append(f"📋 Total tasks for today: <b>{len(all_tasks)}</b>\n")
+    if all_tasks:
+        for t in all_tasks:
+            lines.append(format_task_line(t))
+    lines.append("\n💪 <i>Let's get it done!</i>")
+    return "\n".join(lines)
+
+
+# ── Task formatting ───────────────────────────────────────────────
+
+def _recurrence_badge(rule: str | None) -> str:
+    if not rule:
+        return ""
+    return " 🔄"
+
+
+def _label_badges(labels: list | None) -> str:
+    if not labels:
+        return ""
+    return " " + " ".join(f"{l['emoji']}" for l in labels)
+
+
+def _safe_get(task, key):
+    """Safely get a value from a sqlite3.Row or dict."""
+    try:
+        val = task[key]
+        return val
+    except (KeyError, IndexError):
+        return None
+
+
+def format_task_line(task, labels: list | None = None, show_date: bool = False,
+                     position: int | None = None) -> str:
+    status = _safe_get(task, "status") or "pending"
+    if status == "done":
+        icon = "✅"
+    elif labels:
+        icon = labels[0]["emoji"]
+    else:
+        icon = "⏳"
+    desc = escape(task["description"])
+    time_str = f" at {task['due_time']}" if _safe_get(task, "due_time") else ""
+    date_str = f" 📅 {task['due_date']}" if show_date else ""
+    recur = _recurrence_badge(_safe_get(task, "recurrence_rule"))
+    # Show remaining label emojis if more than one
+    extra_lbls = " ".join(l["emoji"] for l in labels[1:]) if labels and len(labels) > 1 else ""
+    if extra_lbls:
+        extra_lbls = " " + extra_lbls
+
+    num = position if position is not None else task["id"]
+    tag = f" <code>[#{task['id']}]</code>" if position is not None else ""
+    return f"{icon} <b>{num}.</b> {desc}{time_str}{date_str}{recur}{extra_lbls}{tag}"
+
+
+def format_task_list(title: str, tasks: list, labels_map: dict | None = None,
+                     show_date: bool = False) -> str:
+    if not tasks:
+        return f"{title}\n\n🎉 <i>Nothing here! Enjoy the free time.</i>"
+
+    lines = [f"{title}\n"]
+    for i, t in enumerate(tasks, 1):
+        task_labels = labels_map.get(t["id"]) if labels_map else None
+        lines.append(format_task_line(t, labels=task_labels, show_date=show_date, position=i))
+    return "\n".join(lines)
+
+
+def format_task_added(task_id: int, description: str, due_date: str,
+                      due_time: str | None, recurrence_rule: str | None,
+                      labels: list | None = None, notes: str | None = None) -> str:
+    desc = escape(description)
+    time_str = f" at {due_time}" if due_time else ""
+    recur_str = ""
+    if recurrence_rule:
+        recur_str = f"\n🔄 Repeats: <code>{recurrence_rule}</code>"
+    label_str = ""
+    if labels:
+        label_str = "\n🏷️ " + " ".join(f"{l['emoji']} {l['name']}" for l in labels)
+    notes_str = ""
+    if notes:
+        notes_str = f"\n📎 <i>{escape(notes)}</i>"
+
+    return (
+        f"✅ <b>Task #{task_id} added!</b>\n\n"
+        f"📝 {desc}\n"
+        f"📅 {due_date}{time_str}"
+        f"{recur_str}{label_str}{notes_str}"
+    )
+
+
+def format_task_detail(task, labels: list | None = None) -> str:
+    """Full detail view of a single task."""
+    status_icon = "✅" if task["status"] == "done" else "⏳"
+    desc = escape(task["description"])
+    time_str = f" at {task['due_time']}" if _safe_get(task, "due_time") else ""
+    recur = ""
+    rule = _safe_get(task, "recurrence_rule")
+    if rule:
+        recur = f"\n🔄 Repeats: <code>{rule}</code>"
+    label_str = ""
+    if labels:
+        label_str = "\n🏷️ " + " ".join(f"{l['emoji']} {l['name']}" for l in labels)
+    notes = _safe_get(task, "notes")
+    notes_str = f"\n\n📎 <b>Notes:</b>\n<i>{escape(notes)}</i>" if notes else "\n\n📎 <i>No notes</i>"
+
+    return (
+        f"{status_icon} <b>Task #{task['id']}</b>\n\n"
+        f"📝 {desc}\n"
+        f"📅 {task['due_date']}{time_str}\n"
+        f"📊 Status: {task['status']}"
+        f"{recur}{label_str}{notes_str}"
+    )
+
+
+def format_task_done(task, next_task_id: int | None = None) -> str:
+    desc = escape(task["description"])
+    msg = f"🎉 <b>Task #{task['id']} done!</b>\n✅ <s>{desc}</s>"
+    if next_task_id:
+        msg += f"\n\n🔄 Next occurrence → <b>Task #{next_task_id}</b>"
+    return msg
+
+
+# ── Review ─────────────────────────────────────────────────────────
+
+def format_daily_review_header() -> str:
+    return (
+        "🌙 <b>End-of-Day Review</b>\n\n"
+        "Let's see what you got done today! Tap the buttons below for each task."
+    )
+
+
+def format_review_task(task, labels: list | None = None) -> str:
+    desc = escape(task["description"])
+    time_str = f" ({task['due_time']})" if _safe_get(task, "due_time") else ""
+    lbls = _label_badges(labels)
+    return f"📌 <b>#{task['id']}</b>. {desc}{time_str}{lbls}"
+
+
+def format_review_done(task_id: int) -> str:
+    return f"✅ <b>#{task_id}</b> — Done! Great job! 🎉"
+
+
+def format_review_carried(task_id: int, new_date: str) -> str:
+    return f"📦 <b>#{task_id}</b> — Moved to {new_date}"
+
+
+def format_review_dropped(task_id: int) -> str:
+    return f"🗑️ <b>#{task_id}</b> — Dropped"
+
+
+def format_no_tasks_review() -> str:
+    return "🌙 <b>Daily Review</b>\n\n🎉 No pending tasks for today. <i>Nice work!</i>"
+
+
+# ── Reminders ──────────────────────────────────────────────────────
+
+def format_reminder(task, time_label: str, labels: list | None = None) -> str:
+    desc = escape(task["description"])
+    lbls = _label_badges(labels)
+    return (
+        f"🔔 <b>Reminder!</b>\n\n"
+        f"📝 \"{desc}\" is due in ~<b>{time_label}</b>\n"
+        f"📅 {task['due_date']} at {task['due_time']}{lbls}"
+    )
+
+
+# ── Labels ─────────────────────────────────────────────────────────
+
+def format_labels_list(labels: list) -> str:
+    if not labels:
+        return "🏷️ <b>Labels</b>\n\n<i>No labels yet. Create one with /newlabel</i>"
+    lines = ["🏷️ <b>Your Labels</b>\n"]
+    for l in labels:
+        lines.append(f"  {l['emoji']} <b>{escape(l['name'])}</b>  <i>(id: {l['id']})</i>")
+    lines.append("\n<i>Manage: /newlabel, /editlabel, /deletelabel</i>")
+    return "\n".join(lines)
+
+
+def format_label_prompt(task_id: int) -> str:
+    return f"🏷️ <b>Pick labels for task #{task_id}</b>\n<i>Tap to assign, then tap ✅ Done</i>"
+
+
+# ── Help & Start ──────────────────────────────────────────────────
+
+def format_start() -> str:
+    return (
+        "👋 <b>Hey there! I'm your Task & Reminder Bot.</b>\n\n"
+        "I help you stay on top of your day. Here's what I can do:\n\n"
+        "📝 <b>Add tasks</b> — just type naturally!\n"
+        "  <i>\"Buy groceries tomorrow at 3pm\"</i>\n"
+        "  <i>\"Clean the house every Saturday\"</i>\n\n"
+        "⏰ <b>Reminders</b> — I'll nudge you before deadlines\n"
+        "☀️ <b>Morning check-in</b> — I'll ask about your day at 7 AM\n"
+        "🌙 <b>Evening review</b> — we'll recap at 9 PM\n"
+        "🔄 <b>Recurring tasks</b> — daily, weekly, you name it\n"
+        "🏷️ <b>Labels</b> — organize with tags like 🏠 Home, 💼 Work\n\n"
+        "Type /help to see all commands!"
+    )
+
+
+def format_help() -> str:
+    return (
+        "📖 <b>Commands</b>\n\n"
+        "<b>Tasks</b>\n"
+        "  /add <code>desc | date [time]</code> — Add a task\n"
+        "  /tasks — Today's tasks\n"
+        "  /upcoming — All upcoming tasks\n"
+        "  /done <code>id</code> — Mark task done\n"
+        "  /delete <code>id</code> — Delete a task\n"
+        "  /edit <code>id field value</code> — Edit a task\n"
+        "  /review — Trigger daily review\n"
+        "  /stoprecur <code>id</code> — Stop a recurring task\n\n"
+        "<b>Labels</b>\n"
+        "  /labels — List all labels\n"
+        "  /newlabel <code>emoji name</code> — Create a label\n"
+        "  /editlabel <code>name emoji newname</code> — Edit a label\n"
+        "  /deletelabel <code>name</code> — Delete a label\n"
+        "  /filter <code>label</code> — Filter tasks by label\n\n"
+        "<b>More</b>\n"
+        "  /undo — Undo last action\n"
+        "  /status — Daily overview\n"
+        "  /history <code>[today|week|month|all]</code> — Completed tasks\n"
+        "  /backup — Download database backup\n\n"
+        "<b>Or just type naturally!</b>\n"
+        "  <i>\"Remind me to call Mom tomorrow at 2pm\"</i>\n"
+        "  <i>\"Gym every Monday and Wednesday\"</i>"
+    )
+
+
+# ── Edit ──────────────────────────────────────────────────────────
+
+def format_task_edited(task_id: int, changes: dict, reason: str = "edit") -> str:
+    parts = []
+    if "description" in changes:
+        parts.append(f"  📝 Description → {escape(changes['description'])}")
+    if "due_date" in changes:
+        parts.append(f"  📅 Date → {changes['due_date']}")
+    if "due_time" in changes:
+        parts.append(f"  ⏰ Time → {changes['due_time']}")
+
+    if reason == "move":
+        header = f"📦 <b>Task #{task_id} moved!</b>"
+    elif reason == "rename":
+        header = f"📝 <b>Task #{task_id} renamed!</b>"
+    else:
+        header = f"✏️ <b>Task #{task_id} updated!</b>"
+
+    return header + "\n\n" + "\n".join(parts)
+
+
+# ── Snooze ────────────────────────────────────────────────────────
+
+def format_snoozed(task_id: int, new_date: str, new_time: str | None) -> str:
+    time_str = f" at {new_time}" if new_time else ""
+    return f"😴 <b>Task #{task_id} snoozed</b> → {new_date}{time_str}"
+
+
+# ── Overdue ───────────────────────────────────────────────────────
+
+def format_overdue_warning(overdue_tasks: list, labels_map: dict | None = None) -> str:
+    if not overdue_tasks:
+        return ""
+    lines = [f"⚠️ <b>Overdue ({len(overdue_tasks)})</b>\n"]
+    for t in overdue_tasks:
+        task_labels = labels_map.get(t["id"]) if labels_map else None
+        lines.append(format_task_line(t, labels=task_labels, show_date=True))
+    return "\n".join(lines)
+
+
+# ── Weekly Summary ────────────────────────────────────────────────
+
+def format_weekly_summary(stats: dict) -> str:
+    total = stats["done"] + stats["pending"] + stats["cancelled"]
+    lines = [
+        "📊 <b>Weekly Summary</b>\n",
+        f"  ✅ Completed: <b>{stats['done']}</b>",
+        f"  ⏳ Carried over: <b>{stats['pending']}</b>",
+        f"  🗑️ Dropped: <b>{stats['cancelled']}</b>",
+        f"  📋 Total: <b>{total}</b>",
+    ]
+    if total > 0:
+        pct = round(stats["done"] / total * 100)
+        lines.append(f"\n  🎯 Completion rate: <b>{pct}%</b>")
+    lines.append("\n<i>Keep up the momentum!</i>")
+    return "\n".join(lines)
+
+
+# ── Undo ──────────────────────────────────────────────────────────
+
+def format_undo_success(action_type: str, task_id: int) -> str:
+    labels = {"done": "un-completed", "delete": "restored", "cancel": "un-cancelled", "edit": "reverted"}
+    label = labels.get(action_type, "reversed")
+    return f"↩️ <b>Undone!</b> Task #{task_id} has been {label}."
+
+
+def format_undo_expired() -> str:
+    return "⏰ <b>Nothing to undo.</b> Undo expires after 5 minutes."
+
+
+def format_undo_nothing() -> str:
+    return "🤷 <b>Nothing to undo.</b> No recent action to reverse."
+
+
+# ── Status ────────────────────────────────────────────────────────
+
+def format_status(today_count: int, overdue_count: int,
+                  upcoming_count: int, completed_today: int) -> str:
+    lines = [
+        "📊 <b>Your Status</b>\n",
+        f"  📋 Today's tasks: <b>{today_count}</b>",
+        f"  ✅ Completed today: <b>{completed_today}</b>",
+    ]
+    if overdue_count > 0:
+        lines.append(f"  ⚠️ Overdue: <b>{overdue_count}</b>")
+    lines.append(f"  📅 Upcoming (7 days): <b>{upcoming_count}</b>")
+    return "\n".join(lines)
+
+
+# ── History ───────────────────────────────────────────────────────
+
+def format_history(tasks: list, period_label: str, labels_map: dict | None = None) -> str:
+    if not tasks:
+        return f"📜 <b>Completed Tasks ({period_label})</b>\n\n<i>No tasks completed in this period.</i>"
+    lines = [f"📜 <b>Completed Tasks ({period_label})</b>\n"]
+    current_date = None
+    for t in tasks:
+        if t["due_date"] != current_date:
+            current_date = t["due_date"]
+            lines.append(f"\n📅 <b>{current_date}</b>")
+        task_labels = labels_map.get(t["id"]) if labels_map else None
+        lines.append(format_task_line(t, labels=task_labels))
+    lines.append(f"\n<i>Total: {len(tasks)} task(s)</i>")
+    return "\n".join(lines)
+
+
+# ── Misc ──────────────────────────────────────────────────────────
+
+def format_error(msg: str) -> str:
+    return f"❌ {escape(msg)}"
+
+
+def format_confirm_task(parsed) -> str:
+    time_str = f" at {parsed.due_time}" if parsed.due_time else ""
+    recur_str = f"\n🔄 Repeats: {escape(parsed.recurrence_rule)}" if parsed.recurrence_rule else ""
+    label_str = ""
+    if parsed.label_names:
+        label_str = "\n🏷️ " + ", ".join(escape(n) for n in parsed.label_names)
+    return (
+        f"🤔 <b>Did you mean:</b>\n\n"
+        f"📝 \"{escape(parsed.description)}\"\n"
+        f"📅 {parsed.due_date}{time_str}"
+        f"{recur_str}{label_str}\n\n"
+        f"<i>Is this correct?</i>"
+    )
+
+
+def format_not_understood() -> str:
+    return (
+        "🤷 <b>I didn't quite get that.</b>\n\n"
+        "Try again or use a command:\n"
+        "  /add <code>Description | YYYY-MM-DD HH:MM</code>\n"
+        "  /tasks — today's tasks\n"
+        "  /upcoming — all upcoming tasks"
+    )
