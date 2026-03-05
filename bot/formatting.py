@@ -117,20 +117,22 @@ def format_task_line(task, labels: list | None = None, show_date: bool = False,
         extra_lbls = " " + extra_lbls
 
     num = position if position is not None else task["id"]
-    tag = f" <code>[#{task['id']}]</code>" if position is not None else ""
-    return f"{icon} <b>{num}.</b> {desc}{time_str}{date_str}{recur}{extra_lbls}{tag}"
+    return f"{icon} <b>{num}.</b> {desc}{time_str}{date_str}{recur}{extra_lbls}"
 
 
 def format_task_list(title: str, tasks: list, labels_map: dict | None = None,
-                     show_date: bool = False) -> str:
+                     show_date: bool = False) -> tuple[str, dict[int, int]]:
+    """Returns (formatted_text, {position: task_id} mapping)."""
     if not tasks:
-        return f"{title}\n\n🎉 <i>Nothing here! Enjoy the free time.</i>"
+        return f"{title}\n\n🎉 <i>Nothing here! Enjoy the free time.</i>", {}
 
     lines = [f"{title}\n"]
+    pos_map = {}
     for i, t in enumerate(tasks, 1):
         task_labels = labels_map.get(t["id"]) if labels_map else None
         lines.append(format_task_line(t, labels=task_labels, show_date=show_date, position=i))
-    return "\n".join(lines)
+        pos_map[i] = t["id"]
+    return "\n".join(lines), pos_map
 
 
 def format_task_added(task_id: int, description: str, due_date: str,

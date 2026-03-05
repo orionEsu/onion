@@ -23,7 +23,8 @@ async def send_morning_prompt(context: ContextTypes.DEFAULT_TYPE):
 
     if existing:
         labels_map = db.get_labels_for_tasks([t["id"] for t in existing])
-        msg += "\n\n" + fmt.format_task_list("📋 <b>Already on your plate</b>", existing, labels_map)
+        text, _ = fmt.format_task_list("📋 <b>Already on your plate</b>", existing, labels_map)
+        msg += "\n\n" + text
 
     # Show overdue tasks if any
     overdue = db.get_overdue_tasks()

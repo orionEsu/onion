@@ -32,16 +32,25 @@ def _build_labels_map(tasks: list) -> dict:
     return db.get_labels_for_tasks([t["id"] for t in tasks])
 
 
-def _remaining_today_summary() -> str:
+def _store_pos_map(context, pos_map: dict):
+    """Store position→task_id mapping so users can reference tasks by list number."""
+    if pos_map:
+        context.application.bot_data["task_pos_map"] = pos_map
+
+
+def _remaining_today_summary(context=None) -> str:
     """Return a short summary of remaining tasks for today, or empty string."""
     today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
     remaining = db.get_tasks_for_date(today)
     if not remaining:
         return "\n\n🎉 <i>All done for today!</i>"
     labels_map = _build_labels_map(remaining)
-    return "\n\n" + fmt.format_task_list(
+    text, pos_map = fmt.format_task_list(
         f"📋 <b>Remaining ({len(remaining)})</b>", remaining, labels_map,
     )
+    if context:
+        _store_pos_map(context, pos_map)
+    return "\n\n" + text
 
 
 def _build_label_keyboard(task_id: int, selected: set | None = None) -> InlineKeyboardMarkup:
@@ -203,7 +212,8 @@ async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     header = "📋 <b>Today's Tasks</b>"
     if overdue:
         header += f"  ⚠️ <i>{len(overdue)} overdue</i>"
-    msg = fmt.format_task_list(header, tasks, labels_map)
+    msg, pos_map = fmt.format_task_list(header, tasks, labels_map)
+    _store_pos_map(context, pos_map)
 
     if overdue:
         overdue_labels = _build_labels_map(overdue)
@@ -216,7 +226,8 @@ async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def upcoming_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tasks = db.get_upcoming_tasks()
     labels_map = _build_labels_map(tasks)
-    msg = fmt.format_task_list("📅 <b>Upcoming Tasks</b>", tasks, labels_map, show_date=True)
+    msg, pos_map = fmt.format_task_list("📅 <b>Upcoming Tasks</b>", tasks, labels_map, show_date=True)
+    _store_pos_map(context, pos_map)
     await update.message.reply_text(msg, parse_mode="HTML")
 
 
@@ -246,7 +257,7 @@ async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         next_id = db.create_next_occurrence(task_id)
 
     msg = fmt.format_task_done(task, next_id)
-    msg += _remaining_today_summary()
+    msg += _remaining_today_summary(context)
     await update.message.reply_text(msg, parse_mode="HTML")
 
 
@@ -270,7 +281,7 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     store_undo(context, "delete", task_id, task_to_dict(task))
     db.delete_task(task_id)
     msg = f"🗑️ Task #{task_id} deleted."
-    msg += _remaining_today_summary()
+    msg += _remaining_today_summary(context)
     await update.message.reply_text(msg, parse_mode="HTML")
 
 
@@ -408,8 +419,10 @@ async def filter_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tasks = db.get_tasks_by_label(label["id"])
     labels_map = _build_labels_map(tasks)
     title = f"{label['emoji']} <b>{label['name']} Tasks</b>"
+    msg, pos_map = fmt.format_task_list(title, tasks, labels_map, show_date=True)
+    _store_pos_map(context, pos_map)
     await update.message.reply_text(
-        fmt.format_task_list(title, tasks, labels_map, show_date=True),
+        msg,
         parse_mode="HTML",
     )
 
@@ -707,7 +720,7 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
         await _add_task_and_respond(update, context, parsed)
 
 
-def _resolve_task(data: dict):
+def _resolve_task(data: dict, context=None):
     """Resolve a task from task_id or task_description.
     Returns (task, error_msg, ambiguous_list).
     - Single match: (task, None, None)
@@ -718,7 +731,13 @@ def _resolve_task(data: dict):
     task_desc = data.get("task_description")
 
     if task_id:
-        task = db.get_task(int(task_id))
+        tid = int(task_id)
+        # Check if the number refers to a list position
+        if context:
+            pos_map = context.application.bot_data.get("task_pos_map", {})
+            if tid in pos_map:
+                tid = pos_map[tid]
+        task = db.get_task(tid)
         if not task:
             return None, f"Task #{task_id} not found.", None
         return task, None, None
@@ -734,9 +753,9 @@ def _resolve_task(data: dict):
     return None, "Which task? Give me a task number or name.", None
 
 
-async def _resolve_or_ask(update, data: dict):
+async def _resolve_or_ask(update, data: dict, context=None):
     """Resolve task or send disambiguation/error. Returns task or None."""
-    task, err, ambiguous = _resolve_task(data)
+    task, err, ambiguous = _resolve_task(data, context)
     if err:
         await update.message.reply_text(fmt.format_error(err), parse_mode="HTML")
         return None
@@ -767,9 +786,9 @@ async def _route_intent(update, context, data: dict, intent: str):
             tasks = db.get_tasks_by_label(label["id"])
             labels_map = _build_labels_map(tasks)
             title = f"{label['emoji']} <b>{label['name']} Tasks</b>"
-            await update.message.reply_text(
-                fmt.format_task_list(title, tasks, labels_map, show_date=True), parse_mode="HTML",
-            )
+            msg, pos_map = fmt.format_task_list(title, tasks, labels_map, show_date=True)
+            _store_pos_map(context, pos_map)
+            await update.message.reply_text(msg, parse_mode="HTML")
             return
         elif query_type == "overdue":
             overdue = db.get_overdue_tasks()
@@ -790,7 +809,7 @@ async def _route_intent(update, context, data: dict, intent: str):
             return await tasks_command(update, context)
 
     elif intent == "done":
-        task = await _resolve_or_ask(update, data)
+        task = await _resolve_or_ask(update, data, context)
         if not task:
             return
         store_undo(context, "done", task["id"], task_to_dict(task))
@@ -799,17 +818,17 @@ async def _route_intent(update, context, data: dict, intent: str):
         if task["recurrence_rule"] and task["recurrence_active"]:
             next_id = db.create_next_occurrence(task["id"])
         msg = fmt.format_task_done(task, next_id)
-        msg += _remaining_today_summary()
+        msg += _remaining_today_summary(context)
         await update.message.reply_text(msg, parse_mode="HTML")
 
     elif intent == "delete":
-        task = await _resolve_or_ask(update, data)
+        task = await _resolve_or_ask(update, data, context)
         if not task:
             return
         store_undo(context, "delete", task["id"], task_to_dict(task))
         db.delete_task(task["id"])
         msg = f"🗑️ Task #{task['id']} deleted."
-        msg += _remaining_today_summary()
+        msg += _remaining_today_summary(context)
         await update.message.reply_text(msg, parse_mode="HTML")
 
     elif intent == "list_labels":
@@ -854,7 +873,7 @@ async def _route_intent(update, context, data: dict, intent: str):
         await update.message.reply_text(f"🗑️ Label <b>{escape(name)}</b> deleted.", parse_mode="HTML")
 
     elif intent == "stop_recur":
-        task = await _resolve_or_ask(update, data)
+        task = await _resolve_or_ask(update, data, context)
         if not task:
             return
         if not task.get("recurrence_rule"):
@@ -864,14 +883,14 @@ async def _route_intent(update, context, data: dict, intent: str):
         await update.message.reply_text(f"🛑 Recurrence stopped for task #{task['id']}.", parse_mode="HTML")
 
     elif intent == "view_task":
-        task = await _resolve_or_ask(update, data)
+        task = await _resolve_or_ask(update, data, context)
         if not task:
             return
         labels = db.get_labels_for_task(task["id"])
         await update.message.reply_text(fmt.format_task_detail(task, labels), parse_mode="HTML")
 
     elif intent == "update_notes":
-        task = await _resolve_or_ask(update, data)
+        task = await _resolve_or_ask(update, data, context)
         if not task:
             return
         notes = data.get("notes", "")
@@ -881,7 +900,7 @@ async def _route_intent(update, context, data: dict, intent: str):
         )
 
     elif intent == "assign_label":
-        task = await _resolve_or_ask(update, data)
+        task = await _resolve_or_ask(update, data, context)
         if not task:
             return
         label_name = data.get("label_name", "")
@@ -896,7 +915,7 @@ async def _route_intent(update, context, data: dict, intent: str):
         )
 
     elif intent == "remove_label":
-        task = await _resolve_or_ask(update, data)
+        task = await _resolve_or_ask(update, data, context)
         if not task:
             return
         label_name = data.get("label_name", "")
@@ -911,7 +930,7 @@ async def _route_intent(update, context, data: dict, intent: str):
         )
 
     elif intent == "edit_task":
-        task = await _resolve_or_ask(update, data)
+        task = await _resolve_or_ask(update, data, context)
         if not task:
             return
 

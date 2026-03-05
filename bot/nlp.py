@@ -130,7 +130,7 @@ RULES:
 - Label inference: cleaning/cooking/laundry->"Home", meeting/deadline/email->"Work", gym/exercise/run->"Health", study/read/course->"Learning", buy/shop/errand->"Errands". Empty list if unsure.
 - Available labels: {labels}
 - confidence: 1.0 = very certain, lower if ambiguous.
-- Task references: When the user refers to a task by number, use "task_id". When they refer by name/description (e.g. "the groceries task", "mechanic task"), use "task_description" with a keyword. Only one of task_id or task_description should be non-null.
+- Task references: When the user says a number (e.g. "task 3", "remove 2"), use "task_id" with that number — it refers to the position in the last displayed list. When they refer by name/description (e.g. "the groceries task", "mechanic task"), use "task_description" with a keyword. Only one of task_id or task_description should be non-null.
 - Multi-action detection: If the message contains more than one action (separated by commas, "and", "then", "also", periods, semicolons, or newlines), you MUST use the compound intent. Look for multiple verbs/commands — e.g. "remove X, add Y, set Z" is three actions. Never ignore part of a multi-action message."""
 
 MORNING_SYSTEM_PROMPT = """You are a task extraction assistant. The user is listing tasks for today in response to a morning planning prompt.
