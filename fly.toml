@@ -1,4 +1,4 @@
-app = "telegram-task-bot"
+app = "app-dry-field-2103"
 
 [build]
   dockerfile = "Dockerfile"
