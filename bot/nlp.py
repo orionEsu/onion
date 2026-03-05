@@ -121,7 +121,7 @@ RULES:
 - "Morning" = 09:00, "afternoon" = 14:00, "evening" = 19:00.
 - If no date mentioned for a task, assume today.
 - If no time mentioned, due_time = null.
-- Recurrence: "every day"->"daily", "every Monday"->"weekly:monday", "every other Friday"->"biweekly:friday", "1st of every month"->"monthly:1", "Mon, Wed, Fri"->"specific:mon,wed,fri". For recurring, due_date = next occurrence.
+- Recurrence: "every day"->"daily", "every 2 days"/"every two days"/"every other day"->"every_n_days:2", "every 3 days"->"every_n_days:3", "every Monday"->"weekly:monday", "every other Friday"->"biweekly:friday", "1st of every month"->"monthly:1", "Mon, Wed, Fri"->"specific:mon,wed,fri". For recurring, due_date = next occurrence.
 - Label inference: cleaning/cooking/laundry->"Home", meeting/deadline/email->"Work", gym/exercise/run->"Health", study/read/course->"Learning", buy/shop/errand->"Errands". Empty list if unsure.
 - Available labels: {labels}
 - confidence: 1.0 = very certain, lower if ambiguous.

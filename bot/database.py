@@ -311,6 +311,15 @@ def compute_next_date(current_date: str, rule: str) -> str | None:
     if rule == "daily":
         return (d + timedelta(days=1)).isoformat()
 
+    if rule.startswith("every_n_days:"):
+        try:
+            n = int(rule.split(":", 1)[1])
+            if n < 1:
+                return None
+        except ValueError:
+            return None
+        return (d + timedelta(days=n)).isoformat()
+
     if rule.startswith("weekly:"):
         day_name = rule.split(":", 1)[1].lower()
         if day_name not in DAY_MAP:
@@ -428,6 +437,15 @@ def _rule_matches_date(rule: str, last_date: str, target: str) -> bool:
 
     if rule == "daily":
         return True  # daily always hits every date after last
+
+    if rule.startswith("every_n_days:"):
+        try:
+            n = int(rule.split(":", 1)[1])
+            if n < 1:
+                return False
+        except ValueError:
+            return False
+        return (d_target - d_last).days % n == 0
 
     if rule.startswith("weekly:"):
         day_name = rule.split(":", 1)[1].lower()
