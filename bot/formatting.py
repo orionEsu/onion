@@ -1,7 +1,7 @@
 """Styled HTML message formatting with emojis for all bot outputs."""
 
 import random
-from datetime import datetime
+from datetime import datetime, timedelta, date
 from html import escape
 
 from bot.config import TIMEZONE
@@ -77,6 +77,44 @@ def _humanize_rule(rule: str) -> str:
     return rule
 
 
+DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+def _humanize_date(due_date: str) -> str:
+    """Convert a date string to a human-readable relative label."""
+    try:
+        d = date.fromisoformat(due_date)
+    except ValueError:
+        return due_date
+
+    today = datetime.now(TIMEZONE).date()
+    delta = (d - today).days
+
+    if delta == 0:
+        return "today"
+    if delta == 1:
+        return "tomorrow"
+    if delta == -1:
+        return "yesterday"
+
+    day_name = DAY_NAMES[d.weekday()]
+
+    # Within this week (2-6 days ahead)
+    if 2 <= delta <= 6:
+        return day_name
+
+    # Next week (7-13 days ahead)
+    if 7 <= delta <= 13:
+        return f"next {day_name}"
+
+    # Same month, more than a week away
+    if d.month == today.month and d.year == today.year:
+        return f"{day_name}, {d.strftime('%B')} {d.day}"
+
+    # Different month
+    return f"{day_name}, {d.strftime('%B')} {d.day}"
+
+
 def _recurrence_badge(rule: str | None) -> str:
     if not rule:
         return ""
@@ -109,7 +147,7 @@ def format_task_line(task, labels: list | None = None, show_date: bool = False,
         icon = "⏳"
     desc = escape(task["description"])
     time_str = f" at {task['due_time']}" if _safe_get(task, "due_time") else ""
-    date_str = f" 📅 {task['due_date']}" if show_date else ""
+    date_str = f" — {_humanize_date(task['due_date'])}" if show_date else ""
     recur = _recurrence_badge(_safe_get(task, "recurrence_rule"))
     # Show remaining label emojis if more than one
     extra_lbls = " ".join(l["emoji"] for l in labels[1:]) if labels and len(labels) > 1 else ""
@@ -153,7 +191,7 @@ def format_task_added(task_id: int, description: str, due_date: str,
     return (
         f"✅ <b>Task #{task_id} added!</b>\n\n"
         f"📝 {desc}\n"
-        f"📅 {due_date}{time_str}"
+        f"📅 {_humanize_date(due_date)}{time_str}"
         f"{recur_str}{label_str}{notes_str}"
     )
 
@@ -176,7 +214,7 @@ def format_task_detail(task, labels: list | None = None) -> str:
     return (
         f"{status_icon} <b>Task #{task['id']}</b>\n\n"
         f"📝 {desc}\n"
-        f"📅 {task['due_date']}{time_str}\n"
+        f"📅 {_humanize_date(task['due_date'])}{time_str}\n"
         f"📊 Status: {task['status']}"
         f"{recur}{label_str}{notes_str}"
     )
@@ -211,7 +249,7 @@ def format_review_done(task_id: int) -> str:
 
 
 def format_review_carried(task_id: int, new_date: str) -> str:
-    return f"📦 <b>#{task_id}</b> — Moved to {new_date}"
+    return f"📦 <b>#{task_id}</b> — Moved to {_humanize_date(new_date)}"
 
 
 def format_review_dropped(task_id: int) -> str:
@@ -230,7 +268,7 @@ def format_reminder(task, time_label: str, labels: list | None = None) -> str:
     return (
         f"🔔 <b>Reminder!</b>\n\n"
         f"📝 \"{desc}\" is due in ~<b>{time_label}</b>\n"
-        f"📅 {task['due_date']} at {task['due_time']}{lbls}"
+        f"📅 {_humanize_date(task['due_date'])} at {task['due_time']}{lbls}"
     )
 
 
@@ -305,7 +343,7 @@ def format_task_edited(task_id: int, changes: dict, reason: str = "edit") -> str
     if "description" in changes:
         parts.append(f"  📝 Description → {escape(changes['description'])}")
     if "due_date" in changes:
-        parts.append(f"  📅 Date → {changes['due_date']}")
+        parts.append(f"  📅 Date → {_humanize_date(changes['due_date'])}")
     if "due_time" in changes:
         parts.append(f"  ⏰ Time → {changes['due_time']}")
 
@@ -323,7 +361,7 @@ def format_task_edited(task_id: int, changes: dict, reason: str = "edit") -> str
 
 def format_snoozed(task_id: int, new_date: str, new_time: str | None) -> str:
     time_str = f" at {new_time}" if new_time else ""
-    return f"😴 <b>Task #{task_id} snoozed</b> → {new_date}{time_str}"
+    return f"😴 <b>Task #{task_id} snoozed</b> → {_humanize_date(new_date)}{time_str}"
 
 
 # ── Overdue ───────────────────────────────────────────────────────
@@ -397,7 +435,7 @@ def format_history(tasks: list, period_label: str, labels_map: dict | None = Non
     for t in tasks:
         if t["due_date"] != current_date:
             current_date = t["due_date"]
-            lines.append(f"\n📅 <b>{current_date}</b>")
+            lines.append(f"\n<b>{_humanize_date(current_date).capitalize()}</b>")
         task_labels = labels_map.get(t["id"]) if labels_map else None
         lines.append(format_task_line(t, labels=task_labels))
     lines.append(f"\n<i>Total: {len(tasks)} task(s)</i>")
@@ -411,7 +449,7 @@ def format_disambiguate(tasks: list) -> str:
     lines = ["🤔 <b>Multiple tasks match. Which one?</b>\n"]
     for t in tasks:
         time_str = f" at {t['due_time']}" if t.get("due_time") else ""
-        lines.append(f"  <b>#{t['id']}</b> — {escape(t['description'])}{time_str} 📅 {t['due_date']}")
+        lines.append(f"  <b>#{t['id']}</b> — {escape(t['description'])}{time_str} — {_humanize_date(t['due_date'])}")
     lines.append("\n<i>Reply with the task number, e.g. \"task 3\"</i>")
     return "\n".join(lines)
 
@@ -429,7 +467,7 @@ def format_confirm_task(parsed) -> str:
     return (
         f"🤔 <b>Did you mean:</b>\n\n"
         f"📝 \"{escape(parsed.description)}\"\n"
-        f"📅 {parsed.due_date}{time_str}"
+        f"📅 {_humanize_date(parsed.due_date)}{time_str}"
         f"{recur_str}{label_str}\n\n"
         f"<i>Is this correct?</i>"
     )
