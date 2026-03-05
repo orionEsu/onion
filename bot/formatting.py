@@ -54,6 +54,29 @@ def format_morning_summary(tasks_added: list, all_tasks: list) -> str:
 
 # ── Task formatting ───────────────────────────────────────────────
 
+def _humanize_rule(rule: str) -> str:
+    """Convert a recurrence rule to human-readable text."""
+    if rule == "daily":
+        return "every day"
+    if rule.startswith("every_n_days:"):
+        n = rule.split(":", 1)[1]
+        return f"every {n} days"
+    if rule.startswith("weekly:"):
+        day = rule.split(":", 1)[1].capitalize()
+        return f"every {day}"
+    if rule.startswith("biweekly:"):
+        day = rule.split(":", 1)[1].capitalize()
+        return f"every other {day}"
+    if rule.startswith("monthly:"):
+        day = rule.split(":", 1)[1]
+        return f"monthly on the {day}th"
+    if rule.startswith("specific:"):
+        days = rule.split(":", 1)[1]
+        day_names = [d.strip().capitalize() for d in days.split(",")]
+        return "every " + ", ".join(day_names)
+    return rule
+
+
 def _recurrence_badge(rule: str | None) -> str:
     if not rule:
         return ""
@@ -117,7 +140,7 @@ def format_task_added(task_id: int, description: str, due_date: str,
     time_str = f" at {due_time}" if due_time else ""
     recur_str = ""
     if recurrence_rule:
-        recur_str = f"\n🔄 Repeats: <code>{recurrence_rule}</code>"
+        recur_str = f"\n🔄 Repeats: {_humanize_rule(recurrence_rule)}"
     label_str = ""
     if labels:
         label_str = "\n🏷️ " + " ".join(f"{l['emoji']} {l['name']}" for l in labels)
@@ -141,7 +164,7 @@ def format_task_detail(task, labels: list | None = None) -> str:
     recur = ""
     rule = _safe_get(task, "recurrence_rule")
     if rule:
-        recur = f"\n🔄 Repeats: <code>{rule}</code>"
+        recur = f"\n🔄 Repeats: {_humanize_rule(rule)}"
     label_str = ""
     if labels:
         label_str = "\n🏷️ " + " ".join(f"{l['emoji']} {l['name']}" for l in labels)
@@ -397,7 +420,7 @@ def format_error(msg: str) -> str:
 
 def format_confirm_task(parsed) -> str:
     time_str = f" at {parsed.due_time}" if parsed.due_time else ""
-    recur_str = f"\n🔄 Repeats: {escape(parsed.recurrence_rule)}" if parsed.recurrence_rule else ""
+    recur_str = f"\n🔄 Repeats: {_humanize_rule(parsed.recurrence_rule)}" if parsed.recurrence_rule else ""
     label_str = ""
     if parsed.label_names:
         label_str = "\n🏷️ " + ", ".join(escape(n) for n in parsed.label_names)
