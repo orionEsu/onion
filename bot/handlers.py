@@ -79,8 +79,41 @@ async def _assign_labels_from_names(task_id: int, label_names: list[str]) -> lis
     return assigned
 
 
+def _is_past_time(due_date: str, due_time: str | None) -> bool:
+    """Check if a task's date+time is already in the past."""
+    if not due_time:
+        return False
+    now = datetime.now(TIMEZONE)
+    today = now.strftime("%Y-%m-%d")
+    if due_date != today:
+        return False
+    try:
+        task_dt = datetime.strptime(f"{due_date} {due_time}", "%Y-%m-%d %H:%M").replace(tzinfo=TIMEZONE)
+        return task_dt < now
+    except ValueError:
+        return False
+
+
 async def _add_task_and_respond(update, context, parsed):
     """Add a task from ParsedTask and send styled response + label prompt."""
+    # Check if time is already past
+    if _is_past_time(parsed.due_date, parsed.due_time):
+        tomorrow = (datetime.now(TIMEZONE) + timedelta(days=1)).strftime("%Y-%m-%d")
+        context.user_data["pending_past_task"] = parsed
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("📅 Move to tomorrow", callback_data=f"past_task_tomorrow"),
+            InlineKeyboardButton("✅ Keep today", callback_data=f"past_task_keep"),
+            InlineKeyboardButton("❌ Cancel", callback_data=f"past_task_cancel"),
+        ]])
+        await update.message.reply_text(
+            f"⏰ <b>Heads up!</b> {parsed.due_time} today has already passed.\n\n"
+            f"📝 \"{escape(parsed.description)}\"\n\n"
+            f"Move it to <b>tomorrow ({tomorrow})</b>, keep it for today, or cancel?",
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
+        return None
+
     task_id = db.add_task(
         parsed.description, parsed.due_date, parsed.due_time,
         recurrence_rule=parsed.recurrence_rule,

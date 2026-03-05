@@ -230,6 +230,42 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("pending_task", None)
         await query.edit_message_text("❌ Cancelled.", parse_mode="HTML")
 
+    # ── Past-time task callbacks ──
+
+    elif data in ("past_task_tomorrow", "past_task_keep", "past_task_cancel"):
+        parsed = context.user_data.pop("pending_past_task", None)
+        if not parsed:
+            await query.edit_message_text("⏰ No pending task.", parse_mode="HTML")
+            return
+
+        if data == "past_task_cancel":
+            await query.edit_message_text("❌ Cancelled.", parse_mode="HTML")
+            return
+
+        if data == "past_task_tomorrow":
+            tomorrow = (datetime.now(TIMEZONE) + timedelta(days=1)).strftime("%Y-%m-%d")
+            parsed.due_date = tomorrow
+
+        task_id = db.add_task(
+            parsed.description, parsed.due_date, parsed.due_time,
+            recurrence_rule=parsed.recurrence_rule,
+            notes=parsed.notes,
+        )
+
+        # Auto-assign labels
+        labels = []
+        for name in parsed.label_names:
+            label = db.get_label_by_name(name)
+            if label:
+                db.add_task_label(task_id, label["id"])
+                labels.append(label)
+
+        msg = fmt.format_task_added(
+            task_id, parsed.description, parsed.due_date, parsed.due_time,
+            parsed.recurrence_rule, labels, notes=parsed.notes,
+        )
+        await query.edit_message_text(msg, parse_mode="HTML")
+
     # ── Label selection callbacks ──
 
     elif data.startswith("label_toggle_"):
