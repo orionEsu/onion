@@ -312,7 +312,26 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
         all_tasks = db.get_tasks_for_date(today)
-        added_tasks = [db.get_task(tid) for tid in added_ids if db.get_task(tid)]
+        added_tasks = []
+        for tid in added_ids:
+            t = db.get_task(tid)
+            if t:
+                added_tasks.append(t)
 
         msg = fmt.format_morning_summary(added_tasks, all_tasks)
         await query.edit_message_text(msg, parse_mode="HTML")
+
+    # ── Clear confirmation ──
+
+    elif data.startswith("clear_confirm_"):
+        scope = data.removeprefix("clear_confirm_")
+        if scope not in ("today", "upcoming", "all"):
+            return
+        count = db.clear_tasks(scope)
+        labels = {"today": "today's", "upcoming": "upcoming", "all": "all"}
+        await query.edit_message_text(
+            f"🧹 <b>Cleared {count} {labels[scope]} task(s).</b>", parse_mode="HTML",
+        )
+
+    elif data == "clear_cancel":
+        await query.edit_message_text("👍 <b>Clear cancelled.</b> Nothing was deleted.", parse_mode="HTML")

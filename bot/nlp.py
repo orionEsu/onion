@@ -94,7 +94,12 @@ Examples: "undo", "undo that", "revert", "take that back"
 {{ "intent": "backup" }}
 Examples: "backup my data", "send me the database", "export my tasks"
 
-17. COMPOUND ACTIONS (multiple things in one message):
+17. CLEAR TASKS:
+{{ "intent": "clear", "scope": "today" or "upcoming" or "all" }}
+Examples: "clear today's tasks", "clear all upcoming tasks", "wipe everything", "delete all tasks", "clear all my tasks", "remove all today's tasks"
+"today" = only today's pending tasks. "upcoming" = all pending tasks from today onwards. "all" = every task in the system including completed.
+
+18. COMPOUND ACTIONS (multiple things in one message):
 {{ "intent": "compound", "actions": [action1, action2, ...] }}
 When the user's message contains MORE THAN ONE action — separated by commas, "and", "then", "also", periods, newlines, or any combination — ALWAYS return a compound intent wrapping each action as a separate object. Each action must be a complete intent object with all its required fields.
 Examples:
@@ -106,11 +111,11 @@ Examples:
 - "finish the groceries task. also add buy shoes on Saturday" -> compound with done + add_task
 - "add gym at 6am then mark task 1 done" -> compound with add_task + done
 
-18. HELP:
+19. HELP:
 {{ "intent": "help" }}
 Examples: "help", "what can you do", "how do I use this", "commands"
 
-19. UNKNOWN:
+20. UNKNOWN:
 {{ "intent": "unknown" }}
 
 IMPORTANT: Always respond with a SINGLE valid JSON object. Never output multiple JSON objects or extra text.

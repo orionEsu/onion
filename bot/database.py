@@ -264,6 +264,21 @@ def reinsert_task(task_data: dict) -> int:
         return task_data["id"]
 
 
+def clear_tasks(scope: str) -> int:
+    """Delete tasks by scope: 'today', 'upcoming', or 'all'. Returns count of deleted tasks."""
+    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+    with _conn() as conn:
+        if scope == "today":
+            cur = conn.execute("DELETE FROM tasks WHERE due_date = ? AND status = 'pending'", (today,))
+        elif scope == "upcoming":
+            cur = conn.execute("DELETE FROM tasks WHERE due_date >= ? AND status = 'pending'", (today,))
+        elif scope == "all":
+            cur = conn.execute("DELETE FROM tasks")
+        else:
+            return 0
+        return cur.rowcount
+
+
 def find_tasks_by_description(query: str) -> list[sqlite3.Row]:
     """Find pending tasks by partial description match (case-insensitive)."""
     with _conn() as conn:

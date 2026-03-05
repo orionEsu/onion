@@ -554,6 +554,30 @@ async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.unlink(tmp_path)
 
 
+VALID_CLEAR_SCOPES = {"today", "upcoming", "all"}
+
+@authorized
+async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    scope = args[0].lower() if args else ""
+    if scope not in VALID_CLEAR_SCOPES:
+        await update.message.reply_text(
+            fmt.format_error("Usage: /clear <today|upcoming|all>"), parse_mode="HTML",
+        )
+        return
+
+    labels = {"today": "today's pending tasks", "upcoming": "all upcoming tasks", "all": "ALL tasks (including completed)"}
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("Yes, clear them", callback_data=f"clear_confirm_{scope}"),
+        InlineKeyboardButton("Cancel", callback_data="clear_cancel"),
+    ]])
+    await update.message.reply_text(
+        f"⚠️ <b>Are you sure?</b>\n\nThis will permanently delete <b>{labels[scope]}</b>.",
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
+
+
 # ── Natural language handler ─────────────────────────────────────
 
 @authorized
@@ -878,6 +902,25 @@ async def _route_intent(update, context, data: dict, intent: str):
         reason = data.get("reason", "edit")
         await update.message.reply_text(
             fmt.format_task_edited(task["id"], changes, reason=reason), parse_mode="HTML",
+        )
+
+    elif intent == "clear":
+        scope = data.get("scope", "")
+        if scope not in VALID_CLEAR_SCOPES:
+            await update.message.reply_text(
+                fmt.format_error("Clear what? Say \"clear today\", \"clear upcoming\", or \"clear all\"."),
+                parse_mode="HTML",
+            )
+            return
+        labels = {"today": "today's pending tasks", "upcoming": "all upcoming tasks", "all": "ALL tasks (including completed)"}
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("Yes, clear them", callback_data=f"clear_confirm_{scope}"),
+            InlineKeyboardButton("Cancel", callback_data="clear_cancel"),
+        ]])
+        await update.message.reply_text(
+            f"⚠️ <b>Are you sure?</b>\n\nThis will permanently delete <b>{labels[scope]}</b>.",
+            parse_mode="HTML",
+            reply_markup=keyboard,
         )
 
     elif intent == "undo":
