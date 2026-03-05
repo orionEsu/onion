@@ -236,7 +236,9 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     store_undo(context, "delete", task_id, task_to_dict(task))
     db.delete_task(task_id)
-    await update.message.reply_text(f"🗑️ Task #{task_id} deleted.", parse_mode="HTML")
+    msg = f"🗑️ Task #{task_id} deleted."
+    msg += _remaining_today_summary()
+    await update.message.reply_text(msg, parse_mode="HTML")
 
 
 @authorized
@@ -649,23 +651,42 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
 
 
 def _resolve_task(data: dict):
-    """Resolve a task from task_id or task_description. Returns (task, error_msg)."""
+    """Resolve a task from task_id or task_description.
+    Returns (task, error_msg, ambiguous_list).
+    - Single match: (task, None, None)
+    - No match/error: (None, error_msg, None)
+    - Multiple matches: (None, None, [tasks])
+    """
     task_id = data.get("task_id")
     task_desc = data.get("task_description")
 
     if task_id:
         task = db.get_task(int(task_id))
         if not task:
-            return None, f"Task #{task_id} not found."
-        return task, None
+            return None, f"Task #{task_id} not found.", None
+        return task, None, None
 
     if task_desc:
-        task = db.find_task_by_description(str(task_desc))
-        if not task:
-            return None, f"No pending task matching \"{escape(str(task_desc))}\"."
-        return task, None
+        matches = db.find_tasks_by_description(str(task_desc))
+        if not matches:
+            return None, f"No pending task matching \"{escape(str(task_desc))}\".", None
+        if len(matches) == 1:
+            return matches[0], None, None
+        return None, None, matches
 
-    return None, "Which task? Give me a task number or name."
+    return None, "Which task? Give me a task number or name.", None
+
+
+async def _resolve_or_ask(update, data: dict):
+    """Resolve task or send disambiguation/error. Returns task or None."""
+    task, err, ambiguous = _resolve_task(data)
+    if err:
+        await update.message.reply_text(fmt.format_error(err), parse_mode="HTML")
+        return None
+    if ambiguous:
+        await update.message.reply_text(fmt.format_disambiguate(ambiguous), parse_mode="HTML")
+        return None
+    return task
 
 
 async def _route_intent(update, context, data: dict, intent: str):
@@ -712,9 +733,8 @@ async def _route_intent(update, context, data: dict, intent: str):
             return await tasks_command(update, context)
 
     elif intent == "done":
-        task, err = _resolve_task(data)
-        if err:
-            await update.message.reply_text(fmt.format_error(err), parse_mode="HTML")
+        task = await _resolve_or_ask(update, data)
+        if not task:
             return
         store_undo(context, "done", task["id"], task_to_dict(task))
         db.update_task_status(task["id"], "done")
@@ -726,13 +746,14 @@ async def _route_intent(update, context, data: dict, intent: str):
         await update.message.reply_text(msg, parse_mode="HTML")
 
     elif intent == "delete":
-        task, err = _resolve_task(data)
-        if err:
-            await update.message.reply_text(fmt.format_error(err), parse_mode="HTML")
+        task = await _resolve_or_ask(update, data)
+        if not task:
             return
         store_undo(context, "delete", task["id"], task_to_dict(task))
         db.delete_task(task["id"])
-        await update.message.reply_text(f"🗑️ Task #{task['id']} deleted.", parse_mode="HTML")
+        msg = f"🗑️ Task #{task['id']} deleted."
+        msg += _remaining_today_summary()
+        await update.message.reply_text(msg, parse_mode="HTML")
 
     elif intent == "list_labels":
         return await labels_command(update, context)
@@ -776,9 +797,8 @@ async def _route_intent(update, context, data: dict, intent: str):
         await update.message.reply_text(f"🗑️ Label <b>{escape(name)}</b> deleted.", parse_mode="HTML")
 
     elif intent == "stop_recur":
-        task, err = _resolve_task(data)
-        if err:
-            await update.message.reply_text(fmt.format_error(err), parse_mode="HTML")
+        task = await _resolve_or_ask(update, data)
+        if not task:
             return
         if not task.get("recurrence_rule"):
             await update.message.reply_text(fmt.format_error("That's not a recurring task."), parse_mode="HTML")
@@ -787,17 +807,15 @@ async def _route_intent(update, context, data: dict, intent: str):
         await update.message.reply_text(f"🛑 Recurrence stopped for task #{task['id']}.", parse_mode="HTML")
 
     elif intent == "view_task":
-        task, err = _resolve_task(data)
-        if err:
-            await update.message.reply_text(fmt.format_error(err), parse_mode="HTML")
+        task = await _resolve_or_ask(update, data)
+        if not task:
             return
         labels = db.get_labels_for_task(task["id"])
         await update.message.reply_text(fmt.format_task_detail(task, labels), parse_mode="HTML")
 
     elif intent == "update_notes":
-        task, err = _resolve_task(data)
-        if err:
-            await update.message.reply_text(fmt.format_error(err), parse_mode="HTML")
+        task = await _resolve_or_ask(update, data)
+        if not task:
             return
         notes = data.get("notes", "")
         db.update_task_notes(task["id"], notes)
@@ -806,9 +824,8 @@ async def _route_intent(update, context, data: dict, intent: str):
         )
 
     elif intent == "assign_label":
-        task, err = _resolve_task(data)
-        if err:
-            await update.message.reply_text(fmt.format_error(err), parse_mode="HTML")
+        task = await _resolve_or_ask(update, data)
+        if not task:
             return
         label_name = data.get("label_name", "")
         label = db.get_label_by_name(label_name)
@@ -822,9 +839,8 @@ async def _route_intent(update, context, data: dict, intent: str):
         )
 
     elif intent == "remove_label":
-        task, err = _resolve_task(data)
-        if err:
-            await update.message.reply_text(fmt.format_error(err), parse_mode="HTML")
+        task = await _resolve_or_ask(update, data)
+        if not task:
             return
         label_name = data.get("label_name", "")
         label = db.get_label_by_name(label_name)
@@ -838,9 +854,8 @@ async def _route_intent(update, context, data: dict, intent: str):
         )
 
     elif intent == "edit_task":
-        task, err = _resolve_task(data)
-        if err:
-            await update.message.reply_text(fmt.format_error(err), parse_mode="HTML")
+        task = await _resolve_or_ask(update, data)
+        if not task:
             return
 
         new_desc = data.get("new_description")

@@ -264,14 +264,14 @@ def reinsert_task(task_data: dict) -> int:
         return task_data["id"]
 
 
-def find_task_by_description(query: str) -> sqlite3.Row | None:
-    """Find a pending task by partial description match (case-insensitive). Returns most recent match."""
+def find_tasks_by_description(query: str) -> list[sqlite3.Row]:
+    """Find pending tasks by partial description match (case-insensitive)."""
     with _conn() as conn:
         return conn.execute(
             "SELECT * FROM tasks WHERE status = 'pending' AND LOWER(description) LIKE ? "
-            "ORDER BY due_date DESC LIMIT 1",
+            "ORDER BY due_date",
             (f"%{query.lower()}%",),
-        ).fetchone()
+        ).fetchall()
 
 
 def get_completed_tasks_for_date(target_date: str) -> list[sqlite3.Row]:
