@@ -32,6 +32,7 @@ from bot.handlers import (
     history_command,
     backup_command,
     clear_command,
+    routine_command,
     handle_natural_language,
 )
 from bot.callbacks import handle_callback
@@ -59,6 +60,7 @@ BOT_COMMANDS = [
     BotCommand("filter", "🔍 Filter by label"),
     BotCommand("stoprecur", "🛑 Stop recurring task"),
     BotCommand("backup", "💾 Backup database"),
+    BotCommand("routine", "🌅 Morning routine"),
     BotCommand("clear", "🧹 Clear tasks"),
     BotCommand("help", "📖 Show help"),
 ]
@@ -114,6 +116,7 @@ def main() -> None:
     app.add_handler(CommandHandler("history", history_command))
     app.add_handler(CommandHandler("backup", backup_command))
     app.add_handler(CommandHandler("clear", clear_command))
+    app.add_handler(CommandHandler("routine", routine_command))
 
     # Label commands
     app.add_handler(CommandHandler("labels", labels_command))

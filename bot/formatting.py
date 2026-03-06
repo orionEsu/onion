@@ -335,6 +335,10 @@ def format_help() -> str:
         "  /editlabel <code>name emoji newname</code> — Edit a label\n"
         "  /deletelabel <code>name</code> — Delete a label\n"
         "  /filter <code>label</code> — Filter tasks by label\n\n"
+        "<b>Routine</b>\n"
+        "  /routine — Show morning routine\n"
+        "  /routine add <code>desc [at time]</code> — Add item\n"
+        "  /routine remove <code>number</code> — Remove item\n\n"
         "<b>More</b>\n"
         "  /undo — Undo last action\n"
         "  /status — Daily overview\n"
@@ -469,6 +473,44 @@ def format_disambiguate(tasks: list) -> str:
 
 def format_error(msg: str) -> str:
     return f"❌ {escape(msg)}"
+
+
+# ── Routine ───────────────────────────────────────────────────────
+
+def format_routine_checklist(items: list, completed_ids: set) -> str:
+    if not items:
+        return ""
+    lines = ["🌅 <b>Morning Routine</b>\n"]
+    for i, item in enumerate(items, 1):
+        check = "✅" if item["id"] in completed_ids else "⬜"
+        time_str = f" ({item['target_time']})" if item["target_time"] else ""
+        lines.append(f"  {check} {i}. {escape(item['description'])}{time_str}")
+    return "\n".join(lines)
+
+
+def format_routine_list(items: list) -> str:
+    if not items:
+        return "🌅 <b>Morning Routine</b>\n\n<i>No routine items yet. Add one with /routine add</i>"
+    lines = ["🌅 <b>Morning Routine</b>\n"]
+    for i, item in enumerate(items, 1):
+        time_str = f" at {item['target_time']}" if item["target_time"] else ""
+        lines.append(f"  {i}. {escape(item['description'])}{time_str}")
+    lines.append("\n<i>Manage: /routine add, /routine remove</i>")
+    return "\n".join(lines)
+
+
+def format_week_preview(counts: dict[str, int]) -> str:
+    if not counts:
+        return ""
+    lines = ["📆 <b>This Week</b>\n"]
+    for date_str in sorted(counts.keys()):
+        try:
+            d = date.fromisoformat(date_str)
+        except ValueError:
+            continue
+        day_label = _humanize_date(date_str).capitalize()
+        lines.append(f"  {day_label}: <b>{counts[date_str]}</b>")
+    return "\n".join(lines)
 
 
 def format_confirm_task(parsed) -> str:

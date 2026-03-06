@@ -115,7 +115,14 @@ Examples:
 {{ "intent": "help" }}
 Examples: "help", "what can you do", "how do I use this", "commands"
 
-20. UNKNOWN:
+20. ROUTINE:
+{{ "intent": "routine", "action": "add" or "remove" or "list", "description": "Drink water", "target_time": "07:00" or null }}
+Examples: "add drink water to my routine at 7am" -> action "add", description "Drink water", target_time "07:00"
+"remove exercise from my routine" -> action "remove", description "exercise"
+"show my routine" / "morning routine" / "list routine" -> action "list"
+"add devotion to my routine" -> action "add", description "Devotion", target_time null
+
+21. UNKNOWN:
 {{ "intent": "unknown" }}
 
 IMPORTANT: Always respond with a SINGLE valid JSON object. Never output multiple JSON objects or extra text.

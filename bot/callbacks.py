@@ -13,8 +13,21 @@ from bot.utils import store_undo, task_to_dict
 logger = logging.getLogger(__name__)
 
 
+def _build_routine_keyboard(items: list, completed_ids: set) -> InlineKeyboardMarkup:
+    """Build per-item toggle buttons for routine checklist."""
+    buttons = []
+    for item in items:
+        check = "✅" if item["id"] in completed_ids else "⬜"
+        time_str = f" ({item['target_time']})" if item["target_time"] else ""
+        buttons.append([InlineKeyboardButton(
+            f"{check} {item['description']}{time_str}",
+            callback_data=f"routine_check_{item['id']}",
+        )])
+    return InlineKeyboardMarkup(buttons)
+
+
 async def send_morning_prompt(context: ContextTypes.DEFAULT_TYPE):
-    """Scheduled at 7 AM. Sends varied greeting + fun fact + existing tasks."""
+    """Scheduled at 7 AM. Sends varied greeting + fun fact + week preview + existing tasks."""
     try:
         # Auto-generate today's recurring task instances
         db.generate_recurring_for_today()
@@ -24,6 +37,13 @@ async def send_morning_prompt(context: ContextTypes.DEFAULT_TYPE):
 
         fun_fact = await nlp.generate_fun_fact()
         msg = fmt.format_morning_prompt(fun_fact)
+
+        # Week preview
+        week_counts = db.get_week_task_counts(today)
+        # Remove today from preview (already shown separately)
+        week_counts.pop(today, None)
+        if week_counts:
+            msg += "\n\n" + fmt.format_week_preview(week_counts)
 
         if existing:
             labels_map = db.get_labels_for_tasks([t["id"] for t in existing])
@@ -49,6 +69,19 @@ async def send_morning_prompt(context: ContextTypes.DEFAULT_TYPE):
 
         context.application.bot_data["morning_prompt_active"] = True
         context.application.bot_data["morning_prompt_tasks"] = []
+
+        # Send routine checklist as a separate message (if items exist)
+        routine_items = db.get_all_routine_items()
+        if routine_items:
+            completed_ids = db.get_routine_completions_for_date(today)
+            checklist_text = fmt.format_routine_checklist(routine_items, completed_ids)
+            routine_kb = _build_routine_keyboard(routine_items, completed_ids)
+            await context.bot.send_message(
+                chat_id=AUTHORIZED_USER_ID,
+                text=checklist_text,
+                parse_mode="HTML",
+                reply_markup=routine_kb,
+            )
     except Exception:
         logger.exception("send_morning_prompt job failed")
 
@@ -345,6 +378,39 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⏩ Skipped labeling for task <b>#{task_id}</b>.",
             parse_mode="HTML",
         )
+
+    # ── Routine callbacks ──
+
+    elif data.startswith("routine_check_"):
+        item_id = _parse_int(data.removeprefix("routine_check_"))
+        if item_id is None:
+            return
+        today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+        completed_ids = db.get_routine_completions_for_date(today)
+
+        # Toggle
+        if item_id in completed_ids:
+            db.uncomplete_routine_item(item_id, today)
+            completed_ids.discard(item_id)
+        else:
+            db.complete_routine_item(item_id, today)
+            completed_ids.add(item_id)
+
+        # Rebuild checklist message + keyboard
+        routine_items = db.get_all_routine_items()
+        checklist_text = fmt.format_routine_checklist(routine_items, completed_ids)
+        routine_kb = _build_routine_keyboard(routine_items, completed_ids)
+        await query.edit_message_text(checklist_text, parse_mode="HTML", reply_markup=routine_kb)
+
+        # Congrats if all complete (once per day)
+        congrats_key = f"routine_congrats_{today}"
+        if db.is_routine_all_complete(today) and not context.application.bot_data.get(congrats_key):
+            context.application.bot_data[congrats_key] = True
+            await context.bot.send_message(
+                chat_id=AUTHORIZED_USER_ID,
+                text="🎉 <b>Morning routine complete!</b> Great start to the day! 💪",
+                parse_mode="HTML",
+            )
 
     # ── Snooze callbacks ──
 

@@ -628,6 +628,82 @@ async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.unlink(tmp_path)
 
 
+# ── Routine command ───────────────────────────────────────────────
+
+@authorized
+async def routine_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.removeprefix("/routine").strip()
+
+    if not text or text.lower() in ("list", "show"):
+        items = db.get_all_routine_items()
+        await update.message.reply_text(fmt.format_routine_list(items), parse_mode="HTML")
+        return
+
+    if text.lower().startswith("add"):
+        desc_text = text[3:].strip()
+        if not desc_text:
+            await update.message.reply_text(
+                fmt.format_error("Usage: /routine add Drink water at 7am"), parse_mode="HTML",
+            )
+            return
+        # Parse optional "at TIME" from the end
+        target_time = None
+        import re
+        m = re.search(r'\bat\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*$', desc_text, re.IGNORECASE)
+        if m:
+            target_time = _parse_user_time(m.group(1))
+            if target_time:
+                desc_text = desc_text[:m.start()].strip()
+        if not desc_text:
+            await update.message.reply_text(
+                fmt.format_error("Please provide a description."), parse_mode="HTML",
+            )
+            return
+        item_id = db.add_routine_item(desc_text, target_time)
+        time_str = f" at {target_time}" if target_time else ""
+        await update.message.reply_text(
+            f"🌅 <b>Added to routine:</b> {escape(desc_text)}{time_str}", parse_mode="HTML",
+        )
+        return
+
+    if text.lower().startswith("remove") or text.lower().startswith("delete"):
+        arg = text.split(None, 1)[1].strip() if " " in text else ""
+        if not arg:
+            await update.message.reply_text(
+                fmt.format_error("Usage: /routine remove <number or name>"), parse_mode="HTML",
+            )
+            return
+        # Try as number (position in list)
+        items = db.get_all_routine_items()
+        try:
+            pos = int(arg)
+            if 1 <= pos <= len(items):
+                item = items[pos - 1]
+                db.delete_routine_item(item["id"])
+                await update.message.reply_text(
+                    f"🗑️ Removed from routine: <b>{escape(item['description'])}</b>", parse_mode="HTML",
+                )
+                return
+        except ValueError:
+            pass
+        # Try as description match
+        item = db.get_routine_item_by_description(arg)
+        if item:
+            db.delete_routine_item(item["id"])
+            await update.message.reply_text(
+                f"🗑️ Removed from routine: <b>{escape(item['description'])}</b>", parse_mode="HTML",
+            )
+        else:
+            await update.message.reply_text(
+                fmt.format_error(f"No routine item matching \"{arg}\"."), parse_mode="HTML",
+            )
+        return
+
+    await update.message.reply_text(
+        fmt.format_error("Usage: /routine [list|add|remove]"), parse_mode="HTML",
+    )
+
+
 VALID_CLEAR_SCOPES = {"today", "upcoming", "all_tasks", "all_labels", "everything"}
 
 CLEAR_LABELS = {
@@ -1093,6 +1169,38 @@ async def _route_intent(update, context, data: dict, intent: str):
                     pass
             else:
                 await _route_intent(update, context, action, action_intent)
+
+    elif intent == "routine":
+        action = data.get("action", "list")
+        if action == "list":
+            items = db.get_all_routine_items()
+            await update.message.reply_text(fmt.format_routine_list(items), parse_mode="HTML")
+        elif action == "add":
+            desc = data.get("description", "").strip()
+            if not desc:
+                await update.message.reply_text(fmt.format_error("What should the routine item be?"), parse_mode="HTML")
+                return
+            target_time = data.get("target_time")
+            db.add_routine_item(desc, target_time)
+            time_str = f" at {target_time}" if target_time else ""
+            await update.message.reply_text(
+                f"🌅 <b>Added to routine:</b> {escape(desc)}{time_str}", parse_mode="HTML",
+            )
+        elif action == "remove":
+            desc = data.get("description", "").strip()
+            if not desc:
+                await update.message.reply_text(fmt.format_error("Which routine item to remove?"), parse_mode="HTML")
+                return
+            item = db.get_routine_item_by_description(desc)
+            if item:
+                db.delete_routine_item(item["id"])
+                await update.message.reply_text(
+                    f"🗑️ Removed from routine: <b>{escape(item['description'])}</b>", parse_mode="HTML",
+                )
+            else:
+                await update.message.reply_text(
+                    fmt.format_error(f"No routine item matching \"{desc}\"."), parse_mode="HTML",
+                )
 
     elif intent == "help":
         return await help_command(update, context)

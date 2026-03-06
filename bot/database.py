@@ -78,6 +78,22 @@ def init_db() -> None:
             FOREIGN KEY (label_id) REFERENCES labels(id) ON DELETE CASCADE
         )""")
 
+        # Routine tables
+        conn.execute("""CREATE TABLE IF NOT EXISTS routine_items (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            description TEXT NOT NULL,
+            target_time TEXT DEFAULT NULL,
+            sort_order  INTEGER NOT NULL DEFAULT 0,
+            created_at  TEXT NOT NULL
+        )""")
+
+        conn.execute("""CREATE TABLE IF NOT EXISTS routine_completions (
+            routine_id     INTEGER NOT NULL,
+            completed_date TEXT NOT NULL,
+            PRIMARY KEY (routine_id, completed_date),
+            FOREIGN KEY (routine_id) REFERENCES routine_items(id) ON DELETE CASCADE
+        )""")
+
         # Indexes for common queries
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_date_status ON tasks(due_date, status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)")
@@ -678,3 +694,88 @@ def get_tasks_by_label(label_id: int) -> list[sqlite3.Row]:
             "WHERE tl.label_id = ? AND t.status = 'pending' AND t.due_date >= ? "
             "ORDER BY t.due_date, t.due_time", (label_id, today),
         ).fetchall()
+
+
+# ── Routine ───────────────────────────────────────────────────────
+
+def add_routine_item(description: str, target_time: str | None = None) -> int:
+    now = datetime.now(TIMEZONE).isoformat()
+    with _conn() as conn:
+        max_order = conn.execute("SELECT COALESCE(MAX(sort_order), 0) FROM routine_items").fetchone()[0]
+        cur = conn.execute(
+            "INSERT INTO routine_items (description, target_time, sort_order, created_at) VALUES (?, ?, ?, ?)",
+            (description, target_time, max_order + 1, now),
+        )
+        return cur.lastrowid
+
+
+def get_all_routine_items() -> list[sqlite3.Row]:
+    with _conn() as conn:
+        return conn.execute("SELECT * FROM routine_items ORDER BY sort_order, id").fetchall()
+
+
+def get_routine_item(item_id: int) -> sqlite3.Row | None:
+    with _conn() as conn:
+        return conn.execute("SELECT * FROM routine_items WHERE id = ?", (item_id,)).fetchone()
+
+
+def get_routine_item_by_description(query: str) -> sqlite3.Row | None:
+    with _conn() as conn:
+        return conn.execute(
+            "SELECT * FROM routine_items WHERE LOWER(description) LIKE ? ORDER BY sort_order LIMIT 1",
+            (f"%{query.lower()}%",),
+        ).fetchone()
+
+
+def delete_routine_item(item_id: int) -> bool:
+    with _conn() as conn:
+        cur = conn.execute("DELETE FROM routine_items WHERE id = ?", (item_id,))
+        return cur.rowcount > 0
+
+
+def complete_routine_item(routine_id: int, date_str: str) -> None:
+    with _conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO routine_completions (routine_id, completed_date) VALUES (?, ?)",
+            (routine_id, date_str),
+        )
+
+
+def uncomplete_routine_item(routine_id: int, date_str: str) -> None:
+    with _conn() as conn:
+        conn.execute(
+            "DELETE FROM routine_completions WHERE routine_id = ? AND completed_date = ?",
+            (routine_id, date_str),
+        )
+
+
+def get_routine_completions_for_date(date_str: str) -> set[int]:
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT routine_id FROM routine_completions WHERE completed_date = ?", (date_str,),
+        ).fetchall()
+        return {row["routine_id"] for row in rows}
+
+
+def is_routine_all_complete(date_str: str) -> bool:
+    with _conn() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM routine_items").fetchone()[0]
+        if total == 0:
+            return False
+        done = conn.execute(
+            "SELECT COUNT(*) FROM routine_completions WHERE completed_date = ?", (date_str,),
+        ).fetchone()[0]
+        return done >= total
+
+
+def get_week_task_counts(start_date: str) -> dict[str, int]:
+    d = date.fromisoformat(start_date)
+    end = d + timedelta(days=6)
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT due_date, COUNT(*) as cnt FROM tasks "
+            "WHERE due_date >= ? AND due_date <= ? AND status = 'pending' "
+            "GROUP BY due_date",
+            (start_date, end.isoformat()),
+        ).fetchall()
+    return {row["due_date"]: row["cnt"] for row in rows}
