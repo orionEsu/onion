@@ -84,6 +84,15 @@ Get your bot token from [@BotFather](https://t.me/BotFather) and your user ID fr
 python -m bot.main
 ```
 
+### 4. Run tests
+
+```bash
+pip install pytest pytest-asyncio
+python -m pytest tests/ -v
+```
+
+Tests use a temporary database — no `.env` or API keys needed.
+
 ### Deploy to Fly.io
 
 ```bash
