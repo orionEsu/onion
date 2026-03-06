@@ -1,11 +1,16 @@
+import logging
+import shutil
 import sqlite3
 from calendar import monthrange
 from contextlib import contextmanager
 from datetime import datetime, timedelta, date
+from pathlib import Path
 from bot.config import DB_PATH, TIMEZONE
 
+logger = logging.getLogger(__name__)
+
 VALID_STATUSES = {"pending", "done", "cancelled"}
-_REMINDER_COLS = {"24h": "reminder_24h", "2h": "reminder_2h"}
+db_startup_status = None  # Set by init_db: "ok", "restored", "fresh", or "awaiting_upload"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -41,7 +46,72 @@ def _conn():
         conn.close()
 
 
+def _check_db_integrity() -> bool:
+    """Return True if the database file exists and passes an integrity check."""
+    if not DB_PATH.exists():
+        return False
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        result = conn.execute("PRAGMA integrity_check").fetchone()
+        conn.close()
+        return result[0] == "ok"
+    except Exception:
+        return False
+
+
+def _restore_from_backup() -> bool:
+    """Attempt to restore the database from the backup file. Returns True on success."""
+    backup_path = Path(str(DB_PATH) + ".bak")
+    if not backup_path.exists():
+        return False
+    try:
+        # Verify backup integrity before restoring
+        conn = sqlite3.connect(str(backup_path))
+        result = conn.execute("PRAGMA integrity_check").fetchone()
+        conn.close()
+        if result[0] != "ok":
+            logger.error("Backup file is also corrupted, cannot restore")
+            return False
+        shutil.copy2(str(backup_path), str(DB_PATH))
+        logger.warning("Database restored from backup: %s", backup_path)
+        return True
+    except Exception as e:
+        logger.error("Failed to restore from backup: %s", e)
+        return False
+
+
+def restore_from_upload(file_path: str) -> bool:
+    """Replace the database with an uploaded backup file. Returns True on success."""
+    global db_startup_status
+    try:
+        conn = sqlite3.connect(file_path)
+        result = conn.execute("PRAGMA integrity_check").fetchone()
+        conn.close()
+        if result[0] != "ok":
+            return False
+        shutil.copy2(file_path, str(DB_PATH))
+        db_startup_status = "ok"
+        init_db()  # Re-run migrations on restored DB
+        return True
+    except Exception as e:
+        logger.error("Failed to restore from uploaded file: %s", e)
+        return False
+
+
 def init_db() -> None:
+    global db_startup_status
+    if DB_PATH.exists() and not _check_db_integrity():
+        logger.error("Database corrupted, attempting restore from backup")
+        if _restore_from_backup():
+            logger.info("Database restored successfully")
+            db_startup_status = "restored"
+        else:
+            logger.warning("No valid backup available, starting with fresh database")
+            DB_PATH.unlink(missing_ok=True)
+            db_startup_status = "awaiting_upload"
+    elif db_startup_status is None:
+        db_startup_status = "ok"
+
     with _conn() as conn:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SCHEMA)
@@ -93,6 +163,26 @@ def init_db() -> None:
             PRIMARY KEY (routine_id, completed_date),
             FOREIGN KEY (routine_id) REFERENCES routine_items(id) ON DELETE CASCADE
         )""")
+
+        # Flexible reminders table (replaces hardcoded reminder_24h / reminder_2h columns)
+        conn.execute("""CREATE TABLE IF NOT EXISTS reminders_sent (
+            task_id        INTEGER NOT NULL,
+            offset_minutes INTEGER NOT NULL,
+            PRIMARY KEY (task_id, offset_minutes),
+            FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+        )""")
+
+        # Migrate old reminder flags to new table
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+        if "reminder_24h" in columns:
+            conn.execute(
+                "INSERT OR IGNORE INTO reminders_sent (task_id, offset_minutes) "
+                "SELECT id, 1440 FROM tasks WHERE reminder_24h = 1"
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO reminders_sent (task_id, offset_minutes) "
+                "SELECT id, 120 FROM tasks WHERE reminder_2h = 1"
+            )
 
         # Indexes for common queries
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_date_status ON tasks(due_date, status)")
@@ -184,29 +274,32 @@ def get_unreviewed_tasks_for_date(target_date: str) -> list[sqlite3.Row]:
         ).fetchall()
 
 
-def get_tasks_needing_reminder(reminder_type: str, now: datetime) -> list[sqlite3.Row]:
-    flag_col = _REMINDER_COLS.get(reminder_type)
-    if not flag_col:
-        raise ValueError(f"Invalid reminder_type: {reminder_type!r}")
-    minutes = 1440 if reminder_type == "24h" else 120
-    window_end = now + timedelta(minutes=minutes + 30)
+def get_tasks_needing_reminder(offset_minutes: int, now: datetime) -> list[sqlite3.Row]:
+    """Get pending tasks that need a reminder at the given offset (minutes before due)."""
+    window_end = now + timedelta(minutes=offset_minutes + 30)
 
     with _conn() as conn:
         return conn.execute(
-            f"SELECT * FROM tasks WHERE status = 'pending' AND due_time IS NOT NULL "
-            f"AND {flag_col} = 0 "
-            f"AND (due_date || ' ' || due_time) <= ? "
-            f"AND (due_date || ' ' || due_time) > ?",
-            (window_end.strftime("%Y-%m-%d %H:%M"), now.strftime("%Y-%m-%d %H:%M")),
+            "SELECT * FROM tasks WHERE status = 'pending' AND due_time IS NOT NULL "
+            "AND id NOT IN (SELECT task_id FROM reminders_sent WHERE offset_minutes = ?) "
+            "AND (due_date || ' ' || due_time) <= ? "
+            "AND (due_date || ' ' || due_time) > ?",
+            (offset_minutes, window_end.strftime("%Y-%m-%d %H:%M"), now.strftime("%Y-%m-%d %H:%M")),
         ).fetchall()
 
 
-def mark_reminder_sent(task_id: int, reminder_type: str) -> None:
-    flag_col = _REMINDER_COLS.get(reminder_type)
-    if not flag_col:
-        raise ValueError(f"Invalid reminder_type: {reminder_type!r}")
+def mark_reminder_sent(task_id: int, offset_minutes: int) -> None:
     with _conn() as conn:
-        conn.execute(f"UPDATE tasks SET {flag_col} = 1 WHERE id = ?", (task_id,))
+        conn.execute(
+            "INSERT OR IGNORE INTO reminders_sent (task_id, offset_minutes) VALUES (?, ?)",
+            (task_id, offset_minutes),
+        )
+
+
+def clear_reminders_for_task(task_id: int) -> None:
+    """Clear all sent reminders for a task (used when rescheduling)."""
+    with _conn() as conn:
+        conn.execute("DELETE FROM reminders_sent WHERE task_id = ?", (task_id,))
 
 
 def mark_reviewed(task_id: int) -> None:
@@ -224,10 +317,10 @@ def update_task_status(task_id: int, status: str) -> None:
 def carry_over_task(task_id: int, new_date: str, new_time: str | None) -> None:
     with _conn() as conn:
         conn.execute(
-            "UPDATE tasks SET due_date = ?, due_time = ?, "
-            "reminder_24h = 0, reminder_2h = 0, reviewed = 0 WHERE id = ?",
+            "UPDATE tasks SET due_date = ?, due_time = ?, reviewed = 0 WHERE id = ?",
             (new_date, new_time, task_id),
         )
+    clear_reminders_for_task(task_id)
 
 
 def delete_task(task_id: int) -> None:
@@ -253,14 +346,15 @@ def update_task(task_id: int, description: str | None = None,
         sets.append("due_time = ?")
         params.append(due_time)
         reset_reminders = True
-    if reset_reminders:
-        sets.extend(["reminder_24h = 0", "reminder_2h = 0"])
     if not sets:
         return False
     params.append(task_id)
     with _conn() as conn:
         cur = conn.execute(f"UPDATE tasks SET {', '.join(sets)} WHERE id = ?", params)
-        return cur.rowcount > 0
+        updated = cur.rowcount > 0
+    if updated and reset_reminders:
+        clear_reminders_for_task(task_id)
+    return updated
 
 
 def get_overdue_tasks() -> list[sqlite3.Row]:

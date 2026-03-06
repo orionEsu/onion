@@ -88,12 +88,16 @@ class TestTaskCRUD:
 
     def test_update_task_date_resets_reminders(self):
         tid = db.add_task("Task", "2026-03-10", "10:00")
-        db.mark_reminder_sent(tid, "24h")
-        assert db.get_task(tid)["reminder_24h"] == 1
+        db.mark_reminder_sent(tid, 1440)
+        # Reminder should be marked
+        from datetime import datetime as dt
+        tasks = db.get_tasks_needing_reminder(1440, dt(2026, 3, 9, 10, 0, tzinfo=TIMEZONE))
+        assert not any(t["id"] == tid for t in tasks)
         db.update_task(tid, due_date="2026-03-15")
-        task = db.get_task(tid)
-        assert task["due_date"] == "2026-03-15"
-        assert task["reminder_24h"] == 0
+        assert db.get_task(tid)["due_date"] == "2026-03-15"
+        # Reminder should be cleared after reschedule
+        tasks = db.get_tasks_needing_reminder(1440, dt(2026, 3, 14, 10, 0, tzinfo=TIMEZONE))
+        assert any(t["id"] == tid for t in tasks)
 
     def test_update_task_returns_false_no_changes(self):
         tid = db.add_task("Task", "2026-03-10", None)
@@ -108,12 +112,15 @@ class TestTaskCRUD:
 
     def test_carry_over_task(self):
         tid = db.add_task("Task", "2026-03-10", "10:00")
-        db.mark_reminder_sent(tid, "24h")
+        db.mark_reminder_sent(tid, 1440)
         db.carry_over_task(tid, "2026-03-12", "15:00")
         task = db.get_task(tid)
         assert task["due_date"] == "2026-03-12"
         assert task["due_time"] == "15:00"
-        assert task["reminder_24h"] == 0
+        # Reminders should be cleared after carry over
+        from datetime import datetime as dt
+        tasks = db.get_tasks_needing_reminder(1440, dt(2026, 3, 11, 15, 0, tzinfo=TIMEZONE))
+        assert any(t["id"] == tid for t in tasks)
 
     def test_get_upcoming_tasks(self):
         today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")

@@ -10,7 +10,7 @@ from telegram.ext import (
 )
 
 from bot.config import BOT_TOKEN, AUTHORIZED_USER_ID
-from bot.database import init_db
+from bot.database import init_db, db_startup_status, restore_from_upload
 from bot.handlers import (
     start_command,
     help_command,
@@ -76,15 +76,75 @@ async def post_init(application: Application) -> None:
     application.bot_data.setdefault("morning_prompt_tasks", [])
     application.bot_data.setdefault("last_undo", None)
 
-    # Notify user of restart
+    # Notify user of restart with DB status
     try:
+        from bot.database import db_startup_status
+        if db_startup_status == "restored":
+            msg = (
+                "🔄 <b>Bot restarted.</b>\n\n"
+                "⚠️ <b>Database was corrupted</b> and has been restored from the last automatic backup. "
+                "Some recent data may be missing."
+            )
+        elif db_startup_status == "awaiting_upload":
+            application.bot_data["awaiting_db_restore"] = True
+            msg = (
+                "🔄 <b>Bot restarted.</b>\n\n"
+                "🚨 <b>Database was corrupted</b> and no automatic backup was available. "
+                "The bot started with an empty database.\n\n"
+                "If you have a backup file (from /backup), <b>send it now</b> as a document to restore your data. "
+                "Otherwise, just continue using the bot normally."
+            )
+        else:
+            msg = "🔄 <b>Bot restarted.</b> All scheduled jobs active."
         await application.bot.send_message(
-            chat_id=AUTHORIZED_USER_ID,
-            text="🔄 <b>Bot restarted.</b> All scheduled jobs active.",
-            parse_mode="HTML",
+            chat_id=AUTHORIZED_USER_ID, text=msg, parse_mode="HTML",
         )
     except Exception as e:
         logger.warning("Could not send startup notification: %s", e)
+
+
+async def handle_db_restore(update, context) -> None:
+    """Handle uploaded database files for restore."""
+    if update.effective_user.id != AUTHORIZED_USER_ID:
+        return
+    if not context.application.bot_data.get("awaiting_db_restore"):
+        return
+
+    doc = update.message.document
+    if not doc.file_name.endswith(".db"):
+        await update.message.reply_text(
+            "⚠️ Please send a <b>.db</b> file (from /backup).", parse_mode="HTML",
+        )
+        return
+
+    import os
+    import tempfile
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    try:
+        file = await context.bot.get_file(doc.file_id)
+        await file.download_to_drive(tmp_path)
+
+        if restore_from_upload(tmp_path):
+            context.application.bot_data["awaiting_db_restore"] = False
+            await update.message.reply_text(
+                "✅ <b>Database restored successfully!</b> Your data is back.",
+                parse_mode="HTML",
+            )
+        else:
+            await update.message.reply_text(
+                "❌ <b>Invalid or corrupted backup file.</b> Please try another file.",
+                parse_mode="HTML",
+            )
+    except Exception as e:
+        logger.error("DB restore from upload failed: %s", e)
+        await update.message.reply_text(
+            "❌ <b>Restore failed.</b> Please try again.", parse_mode="HTML",
+        )
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 
 async def error_handler(update: object, context) -> None:
@@ -127,6 +187,9 @@ def main() -> None:
 
     # Inline keyboard callbacks
     app.add_handler(CallbackQueryHandler(handle_callback))
+
+    # Document handler for database restore uploads
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_db_restore))
 
     # Natural language catch-all (must be last)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_natural_language))

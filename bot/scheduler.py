@@ -11,6 +11,7 @@ from bot.config import (
     MORNING_PROMPT_HOUR, MORNING_PROMPT_MINUTE, AUTHORIZED_USER_ID,
     WEEKLY_SUMMARY_DAY, WEEKLY_SUMMARY_HOUR, WEEKLY_SUMMARY_MINUTE,
     DAILY_BACKUP_HOUR, DAILY_BACKUP_MINUTE, DB_PATH,
+    REMINDER_OFFSETS,
 )
 from bot import database as db
 from bot import formatting as fmt
@@ -76,31 +77,33 @@ async def check_reminders(context) -> None:
         logger.exception("check_reminders job failed")
 
 
+def _format_time_remaining(total_minutes: int) -> str:
+    """Convert minutes into a human-readable time-remaining label."""
+    if total_minutes >= 1440:
+        hours = total_minutes // 60
+        return f"{hours} hours"
+    if total_minutes >= 60:
+        hours = total_minutes // 60
+        mins = total_minutes % 60
+        return f"{hours}h {mins}m" if mins else f"{hours} hours"
+    return f"{total_minutes} minutes"
+
+
 async def _check_reminders_inner(context) -> None:
     now = datetime.now(TIMEZONE)
 
-    for reminder_type in ("24h", "2h"):
-        tasks = db.get_tasks_needing_reminder(reminder_type, now)
+    for offset in REMINDER_OFFSETS:
+        tasks = db.get_tasks_needing_reminder(offset, now)
         if not tasks:
             continue
         labels_map = db.get_labels_for_tasks([t["id"] for t in tasks])
         for task in tasks:
-            # Calculate actual time remaining
             due_dt = datetime.strptime(
                 f"{task['due_date']} {task['due_time']}", "%Y-%m-%d %H:%M"
             ).replace(tzinfo=TIMEZONE)
             diff = due_dt - now
             total_minutes = int(diff.total_seconds() / 60)
-
-            if total_minutes >= 1440:
-                hours = total_minutes // 60
-                label = f"{hours} hours"
-            elif total_minutes >= 60:
-                hours = total_minutes // 60
-                mins = total_minutes % 60
-                label = f"{hours}h {mins}m" if mins else f"{hours} hours"
-            else:
-                label = f"{total_minutes} minutes"
+            label = _format_time_remaining(total_minutes)
 
             labels = labels_map.get(task["id"], [])
             tid = task["id"]
@@ -115,7 +118,7 @@ async def _check_reminders_inner(context) -> None:
                 parse_mode="HTML",
                 reply_markup=keyboard,
             )
-            db.mark_reminder_sent(task["id"], reminder_type)
+            db.mark_reminder_sent(task["id"], offset)
 
 
 async def end_morning_prompt_timeout(context) -> None:

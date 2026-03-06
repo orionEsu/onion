@@ -33,6 +33,14 @@ WEEKLY_SUMMARY_MINUTE: int = int(os.getenv("WEEKLY_SUMMARY_MINUTE", "0"))
 DAILY_BACKUP_HOUR: int = int(os.getenv("DAILY_BACKUP_HOUR", "0"))
 DAILY_BACKUP_MINUTE: int = int(os.getenv("DAILY_BACKUP_MINUTE", "0"))
 
+# Reminder offsets in minutes before due time (comma-separated)
+# Default: 24 hours, 2 hours, 30 minutes
+_raw_offsets = os.getenv("REMINDER_OFFSETS", "1440,120,30")
+REMINDER_OFFSETS: list[int] = sorted(
+    [int(x.strip()) for x in _raw_offsets.split(",") if x.strip().isdigit()],
+    reverse=True,
+)
+
 # Undo expiry
 UNDO_EXPIRY_SECONDS: int = 300  # 5 minutes
 
