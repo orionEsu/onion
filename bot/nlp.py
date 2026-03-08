@@ -159,7 +159,7 @@ Rules:
 - If the message says "done", "that's all", "nothing", "nah", "no", return an empty array [].
 - Keep descriptions concise and clean."""
 
-FUN_FACT_PROMPT = "Give me one short, interesting fun fact (1-2 sentences). Be diverse in topics — science, history, nature, space, animals, technology, food, culture, etc. Just the fact, no preamble."
+FUN_FACT_PROMPT = "Give me one short, interesting fun fact (1-2 sentences). Pick a random topic — science, history, nature, space, animals, technology, food, culture, geography, sports, music, art, psychology, medicine, math, etc. Surprise me with something I probably haven't heard. Just the fact, no preamble."
 
 import asyncio
 import time as _time
@@ -182,7 +182,7 @@ def _get_client():
     return _client
 
 
-def _call_llm_sync(system: str, user_text: str, max_tokens: int = 256) -> str:
+def _call_llm_sync(system: str, user_text: str, max_tokens: int = 256, temperature: float = 0) -> str:
     client = _get_client()
     if _is_anthropic:
         response = client.messages.create(
@@ -190,6 +190,7 @@ def _call_llm_sync(system: str, user_text: str, max_tokens: int = 256) -> str:
             max_tokens=max_tokens,
             system=system,
             messages=[{"role": "user", "content": user_text}],
+            temperature=temperature,
         )
         return response.content[0].text
     else:
@@ -200,12 +201,12 @@ def _call_llm_sync(system: str, user_text: str, max_tokens: int = 256) -> str:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user_text},
             ],
-            temperature=0,
+            temperature=temperature,
         )
         return response.choices[0].message.content
 
 
-async def _call_llm(system: str, user_text: str, max_tokens: int = 256) -> str:
+async def _call_llm(system: str, user_text: str, max_tokens: int = 256, temperature: float = 0) -> str:
     """Run the blocking LLM call in a thread to avoid freezing the event loop."""
     global _last_call_ts
     now = _time.monotonic()
@@ -213,7 +214,7 @@ async def _call_llm(system: str, user_text: str, max_tokens: int = 256) -> str:
     if wait > 0:
         await asyncio.sleep(wait)
     _last_call_ts = _time.monotonic()
-    return await asyncio.to_thread(_call_llm_sync, system, user_text, max_tokens)
+    return await asyncio.to_thread(_call_llm_sync, system, user_text, max_tokens, temperature)
 
 
 def _strip_fences(content: str) -> str:
@@ -335,7 +336,7 @@ async def parse_morning_tasks(user_text: str) -> list[ParsedTask]:
 async def generate_fun_fact() -> str:
     """Generate a fun fact via LLM."""
     try:
-        return (await _call_llm("You provide fun facts.", FUN_FACT_PROMPT, max_tokens=100)).strip()
+        return (await _call_llm("You provide fun facts.", FUN_FACT_PROMPT, max_tokens=100, temperature=1.0)).strip()
     except Exception as e:
         logger.error("Fun fact generation failed: %s", e)
         return "Honey never spoils — archaeologists have found 3000-year-old honey in Egyptian tombs that was still perfectly edible!"
