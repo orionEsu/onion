@@ -335,8 +335,21 @@ async def parse_morning_tasks(user_text: str) -> list[ParsedTask]:
 
 async def generate_fun_fact() -> str:
     """Generate a fun fact via LLM."""
+    import random
+    topics = [
+        "space", "ocean", "history", "animals", "food", "music", "sports",
+        "psychology", "medicine", "math", "geography", "art", "language",
+        "technology", "architecture", "mythology", "weather", "insects",
+        "plants", "human body", "ancient civilizations", "inventions",
+    ]
+    topic = random.choice(topics)
+    today = datetime.now(TIMEZONE).strftime("%A, %B %d")
+    prompt = (
+        f"Today is {today}. Give me one short, surprising fun fact about {topic} "
+        f"(1-2 sentences). Something uncommon and unexpected. Just the fact, no preamble."
+    )
     try:
-        return (await _call_llm("You provide fun facts.", FUN_FACT_PROMPT, max_tokens=100, temperature=1.0)).strip()
+        return (await _call_llm("You provide fun facts.", prompt, max_tokens=100, temperature=1.0)).strip()
     except Exception as e:
         logger.error("Fun fact generation failed: %s", e)
         return "Honey never spoils — archaeologists have found 3000-year-old honey in Egyptian tombs that was still perfectly edible!"
