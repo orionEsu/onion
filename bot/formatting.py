@@ -342,7 +342,8 @@ def format_help() -> str:
         "<b>More</b>\n"
         "  /undo — Undo last action\n"
         "  /status — Daily overview\n"
-        "  /history <code>[today|week|month|all]</code> — Completed tasks\n"
+        "  /completed <code>[today|week|month|all]</code> — Completed tasks\n"
+        "  /history <code>[today|week|month|all]</code> — Full task history\n"
         "  /backup — Download database backup\n"
         "  /clear <code>today|upcoming|all</code> — Clear tasks\n\n"
         "<b>Or just type naturally!</b>\n"
@@ -445,9 +446,49 @@ def format_status(today_count: int, overdue_count: int,
 # ── History ───────────────────────────────────────────────────────
 
 def format_history(tasks: list, period_label: str, labels_map: dict | None = None) -> str:
+    """Format full history showing all task statuses."""
     if not tasks:
-        return f"📜 <b>Completed Tasks ({period_label})</b>\n\n<i>No tasks completed in this period.</i>"
-    lines = [f"📜 <b>Completed Tasks ({period_label})</b>\n"]
+        return f"📜 <b>History ({period_label})</b>\n\n<i>No tasks in this period.</i>"
+
+    done = sum(1 for t in tasks if t["status"] == "done")
+    cancelled = sum(1 for t in tasks if t["status"] == "cancelled")
+    pending = sum(1 for t in tasks if t["status"] == "pending")
+
+    lines = [f"📜 <b>History ({period_label})</b>\n"]
+    current_date = None
+    for t in tasks:
+        if t["due_date"] != current_date:
+            current_date = t["due_date"]
+            lines.append(f"\n<b>{_humanize_date(current_date).capitalize()}</b>")
+        status = t["status"]
+        if status == "done":
+            icon = "✅"
+        elif status == "cancelled":
+            icon = "🗑️"
+        else:
+            icon = "⏳"
+        desc = escape(t["description"])
+        time_str = f" at {t['due_time']}" if _safe_get(t, "due_time") else ""
+        task_labels = labels_map.get(t["id"]) if labels_map else None
+        label_str = " " + " ".join(l["emoji"] for l in task_labels) if task_labels else ""
+        lines.append(f"{icon} {desc}{time_str}{label_str}")
+
+    summary_parts = []
+    if done:
+        summary_parts.append(f"✅ {done} done")
+    if cancelled:
+        summary_parts.append(f"🗑️ {cancelled} dropped")
+    if pending:
+        summary_parts.append(f"⏳ {pending} pending")
+    lines.append(f"\n<i>{' · '.join(summary_parts)} · {len(tasks)} total</i>")
+    return "\n".join(lines)
+
+
+def format_completed(tasks: list, period_label: str, labels_map: dict | None = None) -> str:
+    """Format completed tasks list."""
+    if not tasks:
+        return f"✅ <b>Completed ({period_label})</b>\n\n<i>No tasks completed in this period.</i>"
+    lines = [f"✅ <b>Completed ({period_label})</b>\n"]
     current_date = None
     for t in tasks:
         if t["due_date"] != current_date:

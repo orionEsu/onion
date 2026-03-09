@@ -30,6 +30,7 @@ from bot.handlers import (
     undo_command,
     status_command,
     history_command,
+    completed_command,
     backup_command,
     clear_command,
     routine_command,
@@ -53,7 +54,8 @@ BOT_COMMANDS = [
     BotCommand("edit", "✏️ Edit a task"),
     BotCommand("undo", "↩️ Undo last action"),
     BotCommand("status", "📊 Status overview"),
-    BotCommand("history", "📜 Completed tasks"),
+    BotCommand("completed", "✅ Completed tasks"),
+    BotCommand("history", "📜 Full task history"),
     BotCommand("review", "🌙 Daily review"),
     BotCommand("labels", "🏷️ List labels"),
     BotCommand("newlabel", "🆕 Create a label"),
@@ -174,6 +176,7 @@ def main() -> None:
     app.add_handler(CommandHandler("undo", undo_command))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("history", history_command))
+    app.add_handler(CommandHandler("completed", completed_command))
     app.add_handler(CommandHandler("backup", backup_command))
     app.add_handler(CommandHandler("clear", clear_command))
     app.add_handler(CommandHandler("routine", routine_command))

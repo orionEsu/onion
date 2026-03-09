@@ -343,7 +343,7 @@ class TestHistoryCommand:
         mock_context.args = []
         await history_command(mock_update, mock_context)
         text = mock_update.message.reply_text.call_args.args[0]
-        assert "Completed" in text
+        assert "History" in text
 
     @pytest.mark.asyncio
     async def test_history_today(self, mock_update, mock_context):

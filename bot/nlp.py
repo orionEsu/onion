@@ -27,11 +27,12 @@ INTENTS:
 If the user provides extra context beyond the task title, put it in "notes". E.g. "Buy groceries tomorrow - need milk, eggs, and bread from ShopRite" -> description="Buy groceries", notes="Need milk, eggs, and bread from ShopRite"
 
 2. QUERY TASKS:
-{{ "intent": "query", "query_type": "today" or "upcoming" or "review" or "filter" or "overdue" or "status" or "history", "filter_label": "name", "history_period": "today" or "week" or "month" or "all" }}
+{{ "intent": "query", "query_type": "today" or "upcoming" or "review" or "filter" or "overdue" or "status" or "history" or "completed", "filter_label": "name", "history_period": "today" or "week" or "month" or "all" }}
 Examples: "show my tasks", "what's on today", "upcoming tasks", "show work tasks", "start review"
 "show overdue tasks" / "what did I miss" -> query_type: "overdue"
 "what's my status" / "overview" / "how am I doing" -> query_type: "status"
-"what did I complete" / "show completed tasks" / "done tasks this week" -> query_type: "history" (extract period if mentioned, default "week")
+"what did I complete" / "show completed tasks" / "done tasks today" / "what have I finished" -> query_type: "completed" (extract period if mentioned, default "today")
+"show history" / "task history" / "full history this week" / "show all activity" -> query_type: "history" (extract period if mentioned, default "week")
 
 3. MARK TASK DONE:
 {{ "intent": "done", "task_id": 5, "task_description": null }}

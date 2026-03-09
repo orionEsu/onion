@@ -269,7 +269,7 @@ class TestStatusFormatting:
 class TestHistoryFormatting:
     def test_history_empty(self):
         result = fmt.format_history([], "Today")
-        assert "No tasks completed" in result
+        assert "No tasks in this period" in result
 
     def test_history_with_tasks(self):
         tasks = [
@@ -281,7 +281,8 @@ class TestHistoryFormatting:
         result = fmt.format_history(tasks, "Today")
         assert "A" in result
         assert "B" in result
-        assert "Total: 2" in result
+        assert "2 done" in result
+        assert "2 total" in result
 
 
 # ── Weekly summary ────────────────────────────────────────────────

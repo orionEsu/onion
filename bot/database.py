@@ -447,6 +447,16 @@ def find_tasks_by_description(query: str) -> list[sqlite3.Row]:
         ).fetchall()
 
 
+def find_done_tasks_by_description(query: str) -> list[sqlite3.Row]:
+    """Find recently completed tasks by partial description match (case-insensitive)."""
+    with _conn() as conn:
+        return conn.execute(
+            "SELECT * FROM tasks WHERE status = 'done' AND LOWER(description) LIKE ? "
+            "ORDER BY due_date DESC LIMIT 5",
+            (f"%{query.lower()}%",),
+        ).fetchall()
+
+
 def get_completed_tasks_for_date(target_date: str) -> list[sqlite3.Row]:
     """Tasks with status='done' that were due on target_date."""
     with _conn() as conn:
@@ -460,6 +470,22 @@ def get_completed_tasks(start_date: str | None = None,
                         end_date: str | None = None) -> list[sqlite3.Row]:
     """Completed tasks in a date range, ordered by due_date DESC."""
     query = "SELECT * FROM tasks WHERE status = 'done'"
+    params = []
+    if start_date:
+        query += " AND due_date >= ?"
+        params.append(start_date)
+    if end_date:
+        query += " AND due_date <= ?"
+        params.append(end_date)
+    query += " ORDER BY due_date DESC, due_time DESC"
+    with _conn() as conn:
+        return conn.execute(query, params).fetchall()
+
+
+def get_all_tasks_in_range(start_date: str | None = None,
+                           end_date: str | None = None) -> list[sqlite3.Row]:
+    """All tasks (done, cancelled, pending) in a date range, ordered by due_date DESC."""
+    query = "SELECT * FROM tasks WHERE 1=1"
     params = []
     if start_date:
         query += " AND due_date >= ?"

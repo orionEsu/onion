@@ -167,9 +167,10 @@ async def send_weekly_summary(context) -> None:
 
 
 async def daily_backup(context) -> None:
-    """Create a local backup of the database file at midnight."""
+    """Create a local backup of the database file at midnight and send it via Telegram."""
     import os
     import sys
+    import tempfile
     backup_path = str(DB_PATH) + ".bak"
     try:
         src = sqlite3.connect(str(DB_PATH))
@@ -181,5 +182,32 @@ async def daily_backup(context) -> None:
         if sys.platform != "win32":
             os.chmod(backup_path, 0o600)
         logger.info("Daily backup created: %s", backup_path)
+
+        # Send backup to user via Telegram
+        today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+        filename = f"tasks_backup_{today}.db"
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp_path = tmp.name
+        tmp.close()
+        try:
+            src2 = sqlite3.connect(str(DB_PATH))
+            dst2 = sqlite3.connect(tmp_path)
+            src2.backup(dst2)
+            src2.close()
+            dst2.close()
+            with open(tmp_path, "rb") as f:
+                await context.bot.send_document(
+                    chat_id=AUTHORIZED_USER_ID,
+                    document=f,
+                    filename=filename,
+                    caption=f"💾 <b>Daily backup</b> — {today}",
+                    parse_mode="HTML",
+                )
+            logger.info("Daily backup sent to user via Telegram")
+        except Exception as e:
+            logger.error("Failed to send backup via Telegram: %s", e)
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
     except Exception as e:
         logger.error("Daily backup failed: %s", e)

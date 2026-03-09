@@ -558,30 +558,47 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode="HTML")
 
 
-async def _show_history(update, period: str):
-    """Shared logic for history display."""
+def _resolve_period(period: str):
+    """Resolve a period string to (start_date, end_date, label) or None if invalid."""
     today = datetime.now(TIMEZONE)
     today_str = today.strftime("%Y-%m-%d")
-
     if period == "today":
-        start, end, label = today_str, today_str, "Today"
+        return today_str, today_str, "Today"
     elif period == "week":
-        start = (today - timedelta(days=7)).strftime("%Y-%m-%d")
-        end, label = today_str, "Past 7 Days"
+        return (today - timedelta(days=7)).strftime("%Y-%m-%d"), today_str, "Past 7 Days"
     elif period == "month":
-        start = (today - timedelta(days=30)).strftime("%Y-%m-%d")
-        end, label = today_str, "Past 30 Days"
+        return (today - timedelta(days=30)).strftime("%Y-%m-%d"), today_str, "Past 30 Days"
     elif period == "all":
-        start, end, label = None, None, "All Time"
-    else:
+        return None, None, "All Time"
+    return None
+
+
+async def _show_history(update, period: str):
+    """Show full task history (all statuses)."""
+    result = _resolve_period(period)
+    if not result:
         await update.message.reply_text(
             fmt.format_error("Usage: /history [today|week|month|all]"), parse_mode="HTML",
         )
         return
-
-    tasks = db.get_completed_tasks(start, end)
+    start, end, label = result
+    tasks = db.get_all_tasks_in_range(start, end)
     labels_map = _build_labels_map(tasks)
     await update.message.reply_text(fmt.format_history(tasks, label, labels_map), parse_mode="HTML")
+
+
+async def _show_completed(update, period: str):
+    """Show only completed tasks."""
+    result = _resolve_period(period)
+    if not result:
+        await update.message.reply_text(
+            fmt.format_error("Usage: /completed [today|week|month|all]"), parse_mode="HTML",
+        )
+        return
+    start, end, label = result
+    tasks = db.get_completed_tasks(start, end)
+    labels_map = _build_labels_map(tasks)
+    await update.message.reply_text(fmt.format_completed(tasks, label, labels_map), parse_mode="HTML")
 
 
 @authorized
@@ -589,6 +606,13 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     period = args[0].lower() if args else "week"
     await _show_history(update, period)
+
+
+@authorized
+async def completed_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    period = args[0].lower() if args else "today"
+    await _show_completed(update, period)
 
 
 @authorized
@@ -966,12 +990,37 @@ async def _route_intent(update, context, data: dict, intent: str):
         elif query_type == "history":
             period = data.get("history_period", "week")
             return await _show_history(update, period)
+        elif query_type == "completed":
+            period = data.get("history_period", "today")
+            return await _show_completed(update, period)
         else:
             return await tasks_command(update, context)
 
     elif intent == "done":
-        task = await _resolve_or_ask(update, data, context)
-        if not task:
+        task, err, ambiguous = _resolve_task(data, context)
+        if err:
+            # If no pending match by description, check if it's already done
+            task_desc = data.get("task_description")
+            if task_desc:
+                done_matches = db.find_done_tasks_by_description(str(task_desc))
+                if done_matches:
+                    match = done_matches[0]
+                    tid = match["id"]
+                    keyboard = InlineKeyboardMarkup([[
+                        InlineKeyboardButton("↩️ Yes, undo it", callback_data=f"undo_done_{tid}"),
+                        InlineKeyboardButton("❌ No", callback_data=f"undo_done_cancel"),
+                    ]])
+                    await update.message.reply_text(
+                        f"🔍 <b>\"{escape(match['description'])}\"</b> is already marked as done.\n\n"
+                        f"Would you like to undo that and mark it as pending?",
+                        parse_mode="HTML",
+                        reply_markup=keyboard,
+                    )
+                    return
+            await update.message.reply_text(fmt.format_error(err), parse_mode="HTML")
+            return
+        if ambiguous:
+            await update.message.reply_text(fmt.format_disambiguate(ambiguous), parse_mode="HTML")
             return
         task_date = task["due_date"]
         store_undo(context, "done", task["id"], task_to_dict(task))
@@ -1142,8 +1191,12 @@ async def _route_intent(update, context, data: dict, intent: str):
 
     elif intent == "compound":
         actions = data.get("actions", [])
+        # Snapshot the position map so all actions resolve against the original list
+        original_pos_map = dict(context.application.bot_data.get("task_pos_map", {}))
         for action in actions:
             action_intent = action.get("intent", "unknown")
+            # Restore original pos_map before each action so positions stay consistent
+            context.application.bot_data["task_pos_map"] = dict(original_pos_map)
             if action_intent == "add_task":
                 try:
                     due_date = action.get("due_date", "")

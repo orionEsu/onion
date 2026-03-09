@@ -412,6 +412,26 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML",
             )
 
+    # ── Undo done callbacks ──
+
+    elif data.startswith("undo_done_"):
+        if data == "undo_done_cancel":
+            await query.edit_message_text("👍 <b>OK, no changes made.</b>", parse_mode="HTML")
+        else:
+            task_id = _parse_int(data.removeprefix("undo_done_"))
+            if task_id is None:
+                return
+            task = db.get_task(task_id)
+            if not task:
+                await query.edit_message_text("Task not found.", parse_mode="HTML")
+                return
+            store_undo(context, "done", task_id, task_to_dict(task))
+            db.update_task_status(task_id, "pending")
+            await query.edit_message_text(
+                f"↩️ <b>\"{task['description']}\"</b> marked back as pending.",
+                parse_mode="HTML",
+            )
+
     # ── Snooze callbacks ──
 
     elif data.startswith("snooze_"):
