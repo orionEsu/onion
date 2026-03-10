@@ -109,6 +109,72 @@ def _parse_user_time(text: str) -> str | None:
     return f"{hour:02d}:{minute:02d}"
 
 
+def _parse_natural_date(text: str) -> tuple[str, str | None] | None:
+    """Parse natural language date strings like 'tomorrow', 'next Monday', 'Friday'.
+    Returns (YYYY-MM-DD, HH:MM or None) or None if not recognized."""
+    import re
+    text = text.strip().lower()
+    now = datetime.now(TIMEZONE)
+    today = now.date()
+
+    DAY_MAP = {
+        "monday": 0, "mon": 0, "tuesday": 1, "tue": 1, "tues": 1,
+        "wednesday": 2, "wed": 2, "thursday": 3, "thu": 3, "thur": 3, "thurs": 3,
+        "friday": 4, "fri": 4, "saturday": 5, "sat": 5, "sunday": 6, "sun": 6,
+    }
+
+    # Extract optional time suffix: "tomorrow at 3pm", "friday 10:00"
+    time_part = None
+    time_match = re.search(r'(?:at\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*$', text)
+    if time_match:
+        parsed_time = _parse_user_time(time_match.group(1))
+        if parsed_time:
+            time_part = parsed_time
+            text = text[:time_match.start()].strip()
+
+    if text in ("today",):
+        return today.isoformat(), time_part
+    if text in ("tomorrow", "tmr", "tmrw"):
+        return (today + timedelta(days=1)).isoformat(), time_part
+    if text in ("day after tomorrow",):
+        return (today + timedelta(days=2)).isoformat(), time_part
+
+    # "in N days" / "in a week"
+    in_match = re.match(r'^in\s+(\d+)\s+days?$', text)
+    if in_match:
+        n = int(in_match.group(1))
+        return (today + timedelta(days=n)).isoformat(), time_part
+    if text == "in a week":
+        return (today + timedelta(days=7)).isoformat(), time_part
+
+    # "this weekend" = next Saturday
+    if text in ("this weekend", "weekend"):
+        days_ahead = (5 - today.weekday()) % 7 or 7
+        return (today + timedelta(days=days_ahead)).isoformat(), time_part
+
+    # "next week" = next Monday
+    if text == "next week":
+        days_ahead = (0 - today.weekday()) % 7 or 7
+        return (today + timedelta(days=days_ahead)).isoformat(), time_part
+
+    # "next <day>" or just "<day>"
+    next_prefix = False
+    if text.startswith("next "):
+        next_prefix = True
+        text = text[5:].strip()
+
+    if text in DAY_MAP:
+        target_weekday = DAY_MAP[text]
+        days_ahead = (target_weekday - today.weekday()) % 7
+        if days_ahead == 0:
+            days_ahead = 7  # same day = next week
+        if next_prefix and days_ahead < 7:
+            days_ahead += 7  # "next Friday" when it's already ahead this week
+        return (today + timedelta(days=days_ahead)).isoformat(), time_part
+
+    return None
+
+
 def _is_past_time(due_date: str, due_time: str | None) -> bool:
     """Check if a task's date+time is already in the past."""
     if not due_time:
@@ -792,6 +858,9 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @authorized
 async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Clear stale confirmation states from previous interactions
+    context.user_data.pop("pending_bulk_done", None)
+
     # Check if user is replying with a new time for a past-time task
     if context.user_data.get("pending_past_task"):
         parsed = context.user_data.get("pending_past_task")
@@ -819,11 +888,28 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
         text = (update.message.text or "").strip()
         if not text:
             await update.message.reply_text(
-                fmt.format_error("Please send a date. Format: YYYY-MM-DD or YYYY-MM-DD HH:MM"),
+                fmt.format_error("Please send a date (e.g. \"tomorrow\", \"Friday\", or YYYY-MM-DD)"),
                 parse_mode="HTML",
             )
             context.user_data["awaiting_carry_date"] = task_id
             return
+
+        # Try natural language first ("tomorrow", "next Monday", "Friday")
+        natural = _parse_natural_date(text)
+        if natural:
+            new_date, new_time = natural
+            # Preserve existing time if user didn't specify one
+            if new_time is None:
+                existing = db.get_task(task_id)
+                if existing:
+                    new_time = existing["due_time"]
+            db.carry_over_task(task_id, new_date, new_time)
+            await update.message.reply_text(
+                fmt.format_review_carried(task_id, new_date), parse_mode="HTML",
+            )
+            return
+
+        # Fall back to YYYY-MM-DD [HH:MM] format
         tokens = text.split()
         try:
             new_date = tokens[0]
@@ -831,13 +917,18 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
             new_time = tokens[1] if len(tokens) > 1 else None
             if new_time:
                 datetime.strptime(new_time, "%H:%M")
+            # Preserve existing time if user didn't specify one
+            if new_time is None:
+                existing = db.get_task(task_id)
+                if existing:
+                    new_time = existing["due_time"]
             db.carry_over_task(task_id, new_date, new_time)
             await update.message.reply_text(
                 fmt.format_review_carried(task_id, new_date), parse_mode="HTML",
             )
         except (ValueError, IndexError):
             await update.message.reply_text(
-                fmt.format_error("Invalid format. Use YYYY-MM-DD or YYYY-MM-DD HH:MM"),
+                fmt.format_error("Couldn't understand that date. Try \"tomorrow\", \"Friday\", or YYYY-MM-DD."),
                 parse_mode="HTML",
             )
             context.user_data["awaiting_carry_date"] = task_id
@@ -993,6 +1084,23 @@ async def _route_intent(update, context, data: dict, intent: str):
         elif query_type == "completed":
             period = data.get("history_period", "today")
             return await _show_completed(update, period)
+        elif query_type == "date":
+            query_date = data.get("query_date")
+            if not query_date:
+                return await tasks_command(update, context)
+            try:
+                datetime.strptime(query_date, "%Y-%m-%d")
+            except (ValueError, TypeError):
+                return await tasks_command(update, context)
+            tasks = db.get_tasks_for_date(query_date)
+            labels_map = _build_labels_map(tasks)
+            human_date = fmt._humanize_date(query_date).capitalize()
+            msg, pos_map = fmt.format_task_list(
+                f"📋 <b>Tasks for {human_date}</b>", tasks, labels_map,
+            )
+            _store_pos_map(context, pos_map)
+            await update.message.reply_text(msg, parse_mode="HTML")
+            return
         else:
             return await tasks_command(update, context)
 
@@ -1164,8 +1272,15 @@ async def _route_intent(update, context, data: dict, intent: str):
             changes["due_time"] = new_time
 
         if not changes:
-            await update.message.reply_text(fmt.format_error("No changes specified."), parse_mode="HTML")
-            return
+            # If reason is move/postpone but no date given, default to tomorrow
+            reason = data.get("reason", "edit")
+            if reason == "move":
+                tomorrow = (datetime.now(TIMEZONE) + timedelta(days=1)).strftime("%Y-%m-%d")
+                changes["due_date"] = tomorrow
+                new_date = tomorrow
+            else:
+                await update.message.reply_text(fmt.format_error("No changes specified."), parse_mode="HTML")
+                return
 
         store_undo(context, "edit", task["id"], task_to_dict(task))
         db.update_task(task["id"], description=new_desc, due_date=new_date, due_time=new_time)
@@ -1175,6 +1290,148 @@ async def _route_intent(update, context, data: dict, intent: str):
                                    task_description=task["description"]),
             parse_mode="HTML",
         )
+
+    elif intent == "move_remaining":
+        target_date = data.get("target_date")
+        if not target_date:
+            await update.message.reply_text(
+                fmt.format_error("Move to when? Try: \"move remaining tasks to tomorrow\""),
+                parse_mode="HTML",
+            )
+            return
+        try:
+            datetime.strptime(target_date, "%Y-%m-%d")
+        except (ValueError, TypeError):
+            await update.message.reply_text(
+                fmt.format_error("Couldn't understand the target date."), parse_mode="HTML",
+            )
+            return
+
+        scope = data.get("scope", "today")
+        today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+        if scope == "overdue":
+            tasks = db.get_overdue_tasks()
+            scope_label = "overdue"
+        elif scope == "all":
+            today_tasks = db.get_tasks_for_date(today)
+            overdue_tasks = db.get_overdue_tasks()
+            seen_ids = set()
+            tasks = []
+            for t in today_tasks + overdue_tasks:
+                if t["id"] not in seen_ids:
+                    tasks.append(t)
+                    seen_ids.add(t["id"])
+            scope_label = "pending"
+        else:
+            tasks = db.get_tasks_for_date(today)
+            scope_label = "today's"
+
+        if not tasks:
+            await update.message.reply_text(
+                f"📋 <b>No {scope_label} pending tasks to move.</b>", parse_mode="HTML",
+            )
+            return
+        for task in tasks:
+            store_undo(context, "edit", task["id"], task_to_dict(task))
+            db.update_task(task["id"], due_date=target_date)
+        human_date = fmt._humanize_date(target_date)
+        await update.message.reply_text(
+            f"📦 <b>Moved {len(tasks)} {scope_label} task(s) to {human_date}.</b>",
+            parse_mode="HTML",
+        )
+
+    elif intent == "bulk_done":
+        today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+        tasks = db.get_tasks_for_date(today)
+        if not tasks:
+            await update.message.reply_text(
+                "📋 <b>No pending tasks for today.</b>", parse_mode="HTML",
+            )
+            return
+
+        # Confirm before bulk action if multiple tasks
+        pending_bulk = context.user_data.pop("pending_bulk_done", False)
+        if len(tasks) > 1 and not pending_bulk:
+            context.user_data["pending_bulk_done"] = True
+            task_list = "\n".join(f"  • {escape(t['description'])}" for t in tasks)
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Yes, mark all done", callback_data="bulk_done_confirm"),
+                InlineKeyboardButton("❌ Cancel", callback_data="bulk_done_cancel"),
+            ]])
+            await update.message.reply_text(
+                f"⚠️ <b>Mark all {len(tasks)} task(s) as done?</b>\n\n{task_list}",
+                parse_mode="HTML",
+                reply_markup=keyboard,
+            )
+            return
+
+        for task in tasks:
+            db.update_task_status(task["id"], "done")
+            if task["recurrence_rule"] and task["recurrence_active"]:
+                db.create_next_occurrence(task["id"])
+        await update.message.reply_text(
+            f"🎉 <b>All done!</b> Marked {len(tasks)} task(s) as completed.", parse_mode="HTML",
+        )
+
+    elif intent == "snooze":
+        task = await _resolve_or_ask(update, data, context)
+        if not task:
+            return
+        store_undo(context, "edit", task["id"], task_to_dict(task))
+        duration = data.get("duration", "1h")
+        now = datetime.now(TIMEZONE)
+        if duration == "tomorrow":
+            tomorrow = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+            db.carry_over_task(task["id"], tomorrow, task["due_time"])
+            await update.message.reply_text(
+                fmt.format_snoozed(task["id"], tomorrow, task["due_time"]), parse_mode="HTML",
+            )
+        else:
+            # Parse hours from duration like "1h", "2h", "3h"
+            import re
+            m = re.match(r"(\d+)h", duration)
+            hours = int(m.group(1)) if m else 1
+            if not task["due_time"]:
+                # No time set — move to tomorrow instead
+                tomorrow = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+                db.carry_over_task(task["id"], tomorrow, None)
+                await update.message.reply_text(
+                    fmt.format_snoozed(task["id"], tomorrow, None), parse_mode="HTML",
+                )
+            else:
+                # Snooze from NOW if task is overdue, otherwise from due time
+                due_dt = datetime.strptime(
+                    f"{task['due_date']} {task['due_time']}", "%Y-%m-%d %H:%M"
+                ).replace(tzinfo=TIMEZONE)
+                base_dt = max(due_dt, now)
+                new_dt = base_dt + timedelta(hours=hours)
+                new_date = new_dt.strftime("%Y-%m-%d")
+                new_time = new_dt.strftime("%H:%M")
+                db.carry_over_task(task["id"], new_date, new_time)
+                await update.message.reply_text(
+                    fmt.format_snoozed(task["id"], new_date, new_time), parse_mode="HTML",
+                )
+
+    elif intent == "greeting":
+        greet_type = data.get("type", "hello")
+        if greet_type == "thanks":
+            await update.message.reply_text(
+                "😊 <b>You're welcome!</b> Let me know if you need anything else.",
+                parse_mode="HTML",
+            )
+        elif greet_type == "goodbye":
+            await update.message.reply_text(
+                "👋 <b>See you later!</b> I'll keep your reminders running.",
+                parse_mode="HTML",
+            )
+        else:
+            today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+            tasks = db.get_tasks_for_date(today)
+            task_info = f" You have <b>{len(tasks)}</b> task(s) for today." if tasks else " No tasks for today yet."
+            await update.message.reply_text(
+                f"👋 <b>Hey there!</b>{task_info}\n\n<i>Send me a task or ask anything!</i>",
+                parse_mode="HTML",
+            )
 
     elif intent == "clear":
         scope = data.get("scope", "ask")

@@ -160,7 +160,9 @@ async def _handle_snooze(query, data: str):
         due_dt = datetime.strptime(
             f"{task['due_date']} {task['due_time']}", "%Y-%m-%d %H:%M"
         ).replace(tzinfo=TIMEZONE)
-        new_dt = due_dt + timedelta(hours=hours)
+        # Snooze from now if task is already overdue, otherwise from due time
+        base_dt = max(due_dt, datetime.now(TIMEZONE))
+        new_dt = base_dt + timedelta(hours=hours)
         new_date = new_dt.strftime("%Y-%m-%d")
         new_time = new_dt.strftime("%H:%M")
         db.carry_over_task(task_id, new_date, new_time)
@@ -216,8 +218,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         task_id = _parse_int(data.removeprefix("carry_tomorrow_"))
         if task_id is None:
             return
+        task = db.get_task(task_id)
         tomorrow = (datetime.now(TIMEZONE) + timedelta(days=1)).strftime("%Y-%m-%d")
-        db.carry_over_task(task_id, tomorrow, None)
+        db.carry_over_task(task_id, tomorrow, task["due_time"] if task else None)
         await query.edit_message_text(
             fmt.format_review_carried(task_id, tomorrow), parse_mode="HTML",
         )
@@ -476,3 +479,25 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "clear_cancel":
         await query.edit_message_text("👍 <b>Clear cancelled.</b> Nothing was deleted.", parse_mode="HTML")
+
+    # ── Bulk done confirmation ──
+
+    elif data == "bulk_done_confirm":
+        today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+        tasks = db.get_tasks_for_date(today)
+        if not tasks:
+            await query.edit_message_text(
+                "📋 <b>No pending tasks for today.</b>", parse_mode="HTML",
+            )
+            return
+        for task in tasks:
+            db.update_task_status(task["id"], "done")
+            if task["recurrence_rule"] and task["recurrence_active"]:
+                db.create_next_occurrence(task["id"])
+        await query.edit_message_text(
+            f"🎉 <b>All done!</b> Marked {len(tasks)} task(s) as completed.", parse_mode="HTML",
+        )
+
+    elif data == "bulk_done_cancel":
+        context.user_data.pop("pending_bulk_done", None)
+        await query.edit_message_text("👍 <b>OK, no changes made.</b>", parse_mode="HTML")

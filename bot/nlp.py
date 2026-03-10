@@ -27,12 +27,13 @@ INTENTS:
 If the user provides extra context beyond the task title, put it in "notes". E.g. "Buy groceries tomorrow - need milk, eggs, and bread from ShopRite" -> description="Buy groceries", notes="Need milk, eggs, and bread from ShopRite"
 
 2. QUERY TASKS:
-{{ "intent": "query", "query_type": "today" or "upcoming" or "review" or "filter" or "overdue" or "status" or "history" or "completed", "filter_label": "name", "history_period": "today" or "week" or "month" or "all" }}
+{{ "intent": "query", "query_type": "today" or "upcoming" or "review" or "filter" or "overdue" or "status" or "history" or "completed" or "date", "filter_label": "name", "history_period": "today" or "week" or "month" or "all", "query_date": "YYYY-MM-DD" }}
 Examples: "show my tasks", "what's on today", "upcoming tasks", "show work tasks", "start review"
 "show overdue tasks" / "what did I miss" -> query_type: "overdue"
 "what's my status" / "overview" / "how am I doing" -> query_type: "status"
 "what did I complete" / "show completed tasks" / "done tasks today" / "what have I finished" -> query_type: "completed" (extract period if mentioned, default "today")
 "show history" / "task history" / "full history this week" / "show all activity" -> query_type: "history" (extract period if mentioned, default "week")
+"what do I have on Friday" / "show me Monday's tasks" / "tasks for March 15" / "am I free tomorrow" -> query_type: "date", query_date: "YYYY-MM-DD" (resolve the date)
 
 3. MARK TASK DONE:
 {{ "intent": "done", "task_id": 5, "task_description": null }}
@@ -123,7 +124,31 @@ Examples: "add drink water to my routine at 7am" -> action "add", description "D
 "show my routine" / "morning routine" / "list routine" -> action "list"
 "add devotion to my routine" -> action "add", description "Devotion", target_time null
 
-21. UNKNOWN:
+21. MOVE REMAINING TASKS (bulk move):
+{{ "intent": "move_remaining", "scope": "today" or "overdue" or "all", "target_date": "YYYY-MM-DD" }}
+Examples: "move remaining tasks to tomorrow", "push today's tasks to Monday", "carry over everything to tomorrow" -> scope "today"
+"move overdue tasks to today", "reschedule all overdue to today", "bring overdue tasks forward" -> scope "overdue", target_date = today
+"move all tasks to tomorrow", "move all my tasks to Monday", "push everything to next week" -> scope "all" (both today + overdue)
+scope "today" = pending tasks due today. scope "overdue" = overdue tasks only. scope "all" = today's + overdue combined. target_date follows the same date rules as add_task.
+
+22. MARK ALL TASKS DONE (bulk done):
+{{ "intent": "bulk_done", "scope": "today" }}
+Examples: "mark all tasks as done", "I'm done for today", "finished everything today", "done with all tasks", "completed all tasks"
+scope is always "today". This marks ALL pending tasks for today as done.
+
+23. SNOOZE TASK:
+{{ "intent": "snooze", "task_id": 5, "task_description": null, "duration": "1h" or "2h" or "3h" or "tomorrow" }}
+Examples: "snooze task 5", "snooze task 3 for 2 hours", "remind me about task 5 later", "push back task 2 by an hour", "snooze the groceries task until tomorrow"
+Default duration is "1h" if not specified. Use task_id or task_description like other task intents.
+
+24. GREETING / CASUAL:
+{{ "intent": "greeting", "type": "hello" or "thanks" or "goodbye" }}
+Examples: "hi", "hello", "hey", "good morning", "good evening" -> type "hello"
+"thanks", "thank you", "appreciate it", "nice one" -> type "thanks"
+"bye", "goodbye", "see you", "good night", "gn" -> type "goodbye"
+Only use this for messages that are PURELY greetings/casual with NO task-related content.
+
+25. UNKNOWN:
 {{ "intent": "unknown" }}
 
 IMPORTANT: Always respond with a SINGLE valid JSON object. Never output multiple JSON objects or extra text.
@@ -157,7 +182,7 @@ Rules:
 - Current date: {today}. All tasks default to today.
 - Extract multiple tasks if listed (commas, newlines, numbers).
 - Same label inference rules as before.
-- If the message says "done", "that's all", "nothing", "nah", "no", return an empty array [].
+- If the message is ONLY a closing word like "done", "that's all", "nothing", "nah", "no", "I'm done", "that's it" (with NO task content), return an empty array []. But "done with laundry" or "finish homework" are TASKS — extract them.
 - Keep descriptions concise and clean."""
 
 FUN_FACT_PROMPT = "Give me one short, interesting fun fact (1-2 sentences). Pick a random topic — science, history, nature, space, animals, technology, food, culture, geography, sports, music, art, psychology, medicine, math, etc. Surprise me with something I probably haven't heard. Just the fact, no preamble."
@@ -335,8 +360,10 @@ async def parse_morning_tasks(user_text: str) -> list[ParsedTask]:
 
 
 async def generate_fun_fact() -> str:
-    """Generate a fun fact via LLM."""
+    """Generate a fun fact via LLM, avoiding recent repeats."""
     import random
+    from bot import database as db_mod
+
     topics = [
         "space", "ocean", "history", "animals", "food", "music", "sports",
         "psychology", "medicine", "math", "geography", "art", "language",
@@ -345,12 +372,23 @@ async def generate_fun_fact() -> str:
     ]
     topic = random.choice(topics)
     today = datetime.now(TIMEZONE).strftime("%A, %B %d")
+
+    # Build exclusion list from recent facts
+    recent_facts = db_mod.get_recent_fun_facts(10)
+    exclusion = ""
+    if recent_facts:
+        numbered = "\n".join(f"- {f}" for f in recent_facts)
+        exclusion = f"\n\nDo NOT repeat or rephrase any of these recent facts:\n{numbered}"
+
     prompt = (
         f"Today is {today}. Give me one short, surprising fun fact about {topic} "
         f"(1-2 sentences). Something uncommon and unexpected. Just the fact, no preamble."
+        f"{exclusion}"
     )
     try:
-        return (await _call_llm("You provide fun facts.", prompt, max_tokens=100, temperature=1.0)).strip()
+        fact = (await _call_llm("You provide fun facts.", prompt, max_tokens=100, temperature=1.0)).strip()
+        db_mod.log_fun_fact(fact)
+        return fact
     except Exception as e:
         logger.error("Fun fact generation failed: %s", e)
         return "Honey never spoils — archaeologists have found 3000-year-old honey in Egyptian tombs that was still perfectly edible!"
