@@ -185,8 +185,6 @@ Rules:
 - If the message is ONLY a closing word like "done", "that's all", "nothing", "nah", "no", "I'm done", "that's it" (with NO task content), return an empty array []. But "done with laundry" or "finish homework" are TASKS — extract them.
 - Keep descriptions concise and clean."""
 
-FUN_FACT_PROMPT = "Give me one short, interesting fun fact (1-2 sentences). Pick a random topic — science, history, nature, space, animals, technology, food, culture, geography, sports, music, art, psychology, medicine, math, etc. Surprise me with something I probably haven't heard. Just the fact, no preamble."
-
 import asyncio
 import time as _time
 
@@ -357,38 +355,3 @@ async def parse_morning_tasks(user_text: str) -> list[ParsedTask]:
     except Exception as e:
         logger.error("Morning tasks parsing failed: %s", e)
         return []
-
-
-async def generate_fun_fact() -> str:
-    """Generate a fun fact via LLM, avoiding recent repeats."""
-    import random
-    from bot import database as db_mod
-
-    topics = [
-        "space", "ocean", "history", "animals", "food", "music", "sports",
-        "psychology", "medicine", "math", "geography", "art", "language",
-        "technology", "architecture", "mythology", "weather", "insects",
-        "plants", "human body", "ancient civilizations", "inventions",
-    ]
-    topic = random.choice(topics)
-    today = datetime.now(TIMEZONE).strftime("%A, %B %d")
-
-    # Build exclusion list from recent facts
-    recent_facts = db_mod.get_recent_fun_facts(10)
-    exclusion = ""
-    if recent_facts:
-        numbered = "\n".join(f"- {f}" for f in recent_facts)
-        exclusion = f"\n\nDo NOT repeat or rephrase any of these recent facts:\n{numbered}"
-
-    prompt = (
-        f"Today is {today}. Give me one short, surprising fun fact about {topic} "
-        f"(1-2 sentences). Something uncommon and unexpected. Just the fact, no preamble."
-        f"{exclusion}"
-    )
-    try:
-        fact = (await _call_llm("You provide fun facts.", prompt, max_tokens=100, temperature=1.0)).strip()
-        db_mod.log_fun_fact(fact)
-        return fact
-    except Exception as e:
-        logger.error("Fun fact generation failed: %s", e)
-        return "Honey never spoils — archaeologists have found 3000-year-old honey in Egyptian tombs that was still perfectly edible!"

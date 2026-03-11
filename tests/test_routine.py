@@ -2,7 +2,7 @@
 
 import pytest
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from html import escape
 
 from bot import database as db
@@ -328,8 +328,7 @@ class TestMorningPromptRoutine:
         db.add_routine_item("Exercise")
         mock_context.application.bot_data = {}
 
-        with patch("bot.callbacks.nlp.generate_fun_fact", new_callable=AsyncMock, return_value="Fun fact here"):
-            await send_morning_prompt(mock_context)
+        await send_morning_prompt(mock_context)
 
         calls = mock_context.bot.send_message.call_args_list
         assert len(calls) >= 2, "Should send at least 2 messages (main + routine)"
@@ -346,8 +345,7 @@ class TestMorningPromptRoutine:
 
         mock_context.application.bot_data = {}
 
-        with patch("bot.callbacks.nlp.generate_fun_fact", new_callable=AsyncMock, return_value="Fun fact"):
-            await send_morning_prompt(mock_context)
+        await send_morning_prompt(mock_context)
 
         calls = mock_context.bot.send_message.call_args_list
         assert len(calls) == 1, "Only main message, no routine"
@@ -361,8 +359,7 @@ class TestMorningPromptRoutine:
         db.add_task("Future task", tomorrow, None)
         mock_context.application.bot_data = {}
 
-        with patch("bot.callbacks.nlp.generate_fun_fact", new_callable=AsyncMock, return_value="Fun fact"):
-            await send_morning_prompt(mock_context)
+        await send_morning_prompt(mock_context)
 
         main_msg = mock_context.bot.send_message.call_args_list[0]
         text = main_msg.kwargs.get("text", "")

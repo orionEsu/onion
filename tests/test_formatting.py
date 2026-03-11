@@ -409,14 +409,8 @@ class TestMiscFormatting:
         assert "Buy eggs" in result
 
     def test_format_morning_prompt(self):
-        result = fmt.format_morning_prompt("Honey never spoils.")
-        assert "Honey never spoils" in result
-        assert "Fun fact" in result
-
-    def test_format_morning_prompt_truncates_long_fact(self):
-        long_fact = "A" * 500
-        result = fmt.format_morning_prompt(long_fact)
-        assert "..." in result
+        result = fmt.format_morning_prompt()
+        assert "What are you up to today" in result
 
     def test_format_morning_summary(self):
         added = [{"id": 1, "description": "Task", "due_date": "2026-03-10",

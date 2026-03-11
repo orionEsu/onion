@@ -27,14 +27,10 @@ MORNING_GREETINGS = [
 ]
 
 
-def format_morning_prompt(fun_fact: str) -> str:
+def format_morning_prompt() -> str:
     greeting = random.choice(MORNING_GREETINGS)
-    # Limit fun fact length to prevent oversized messages
-    if len(fun_fact) > 300:
-        fun_fact = fun_fact[:297] + "..."
     return (
         f"{greeting}\n\n"
-        f"💡 <b>Fun fact:</b> <i>{escape(fun_fact)}</i>\n\n"
         f"📝 <b>What are you up to today?</b>\n"
         f"<i>Send me your tasks and I'll add them. Tap the button when you're done.</i>"
     )

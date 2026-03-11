@@ -7,7 +7,6 @@ from telegram.ext import ContextTypes
 from bot.config import AUTHORIZED_USER_ID, TIMEZONE
 from bot import database as db
 from bot import formatting as fmt
-from bot import nlp
 from bot.utils import store_undo, task_to_dict
 
 logger = logging.getLogger(__name__)
@@ -27,7 +26,7 @@ def _build_routine_keyboard(items: list, completed_ids: set) -> InlineKeyboardMa
 
 
 async def send_morning_prompt(context: ContextTypes.DEFAULT_TYPE):
-    """Scheduled at 7 AM. Sends varied greeting + fun fact + week preview + existing tasks."""
+    """Scheduled at 7 AM. Sends varied greeting + week preview + existing tasks."""
     try:
         # Auto-generate today's recurring task instances
         db.generate_recurring_for_today()
@@ -35,8 +34,7 @@ async def send_morning_prompt(context: ContextTypes.DEFAULT_TYPE):
         today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
         existing = db.get_tasks_for_date(today)
 
-        fun_fact = await nlp.generate_fun_fact()
-        msg = fmt.format_morning_prompt(fun_fact)
+        msg = fmt.format_morning_prompt()
 
         # Week preview
         week_counts = db.get_week_task_counts(today)

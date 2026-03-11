@@ -184,13 +184,6 @@ def init_db() -> None:
                 "SELECT id, 120 FROM tasks WHERE reminder_2h = 1"
             )
 
-        # Fun facts log (to avoid repeats)
-        conn.execute("""CREATE TABLE IF NOT EXISTS fun_facts_log (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            fact         TEXT NOT NULL,
-            created_date TEXT NOT NULL
-        )""")
-
         # Indexes for common queries
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_date_status ON tasks(due_date, status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)")
@@ -908,25 +901,3 @@ def get_week_task_counts(start_date: str) -> dict[str, int]:
     return {row["due_date"]: row["cnt"] for row in rows}
 
 
-# ── Fun Facts Log ─────────────────────────────────────────────────
-
-def log_fun_fact(fact: str) -> None:
-    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
-    with _conn() as conn:
-        conn.execute(
-            "INSERT INTO fun_facts_log (fact, created_date) VALUES (?, ?)",
-            (fact, today),
-        )
-        # Keep only last 30 entries
-        conn.execute(
-            "DELETE FROM fun_facts_log WHERE id NOT IN "
-            "(SELECT id FROM fun_facts_log ORDER BY id DESC LIMIT 30)"
-        )
-
-
-def get_recent_fun_facts(n: int = 10) -> list[str]:
-    with _conn() as conn:
-        rows = conn.execute(
-            "SELECT fact FROM fun_facts_log ORDER BY id DESC LIMIT ?", (n,)
-        ).fetchall()
-    return [row["fact"] for row in rows]
