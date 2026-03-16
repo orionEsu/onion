@@ -1016,6 +1016,18 @@ def _resolve_task(data: dict, context=None):
     task_desc = data.get("task_description")
 
     if task_id:
+        # Handle "last" as a special reference to the last item in the list
+        if str(task_id).lower() == "last":
+            if context:
+                pos_map = context.application.bot_data.get("task_pos_map", {})
+                if pos_map:
+                    last_pos = max(pos_map.keys())
+                    tid = pos_map[last_pos]
+                    task = db.get_task(tid)
+                    if task:
+                        return task, None, None
+            return None, "No task list available. Use /upcoming first, then try again.", None
+
         tid = int(task_id)
         # Check if the number refers to a list position
         if context:

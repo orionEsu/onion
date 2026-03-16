@@ -204,11 +204,13 @@ RULES:
 - "Morning" = 09:00, "afternoon" = 14:00, "evening" = 19:00.
 - If no date mentioned for a task, assume today.
 - If no time mentioned, due_time = null.
-- Recurrence: "every day"->"daily", "every 2 days"/"every two days"/"every other day"->"every_n_days:2", "every 3 days"->"every_n_days:3", "every Monday"->"weekly:monday", "every other Friday"->"biweekly:friday", "1st of every month"->"monthly:1", "Mon, Wed, Fri"->"specific:mon,wed,fri". For recurring, due_date = next occurrence.
+- Recurrence: "every day"->"daily", "every 2 days"/"every two days"/"every other day"->"every_n_days:2", "every 3 days"->"every_n_days:3", "every Monday"->"weekly:monday", "every other Friday"->"biweekly:friday", "1st of every month"->"monthly:1", "Mon, Wed, Fri"->"specific:mon,wed,fri". For recurring, due_date = next occurrence (e.g. "every 2 days" with no start date = today; "every 2 days from tomorrow" / "every 2 days starting tomorrow" = tomorrow).
+- Recurrence + time: time modifiers apply alongside recurrence. "pump water every 2 days afternoon" = recurrence "every_n_days:2" + due_time "14:00". "exercise daily morning" = "daily" + "09:00". Always extract both if present.
 - Label inference: cleaning/cooking/laundry->"Home", meeting/deadline/email->"Work", gym/exercise/run->"Health", study/read/course->"Learning", buy/shop/errand->"Errands". Empty list if unsure.
 - Available labels: {labels}
 - confidence: 1.0 = very certain, lower if ambiguous.
 - Task references: When the user says a number (e.g. "task 3", "remove 2"), use "task_id" with that number — it refers to the position in the last displayed list. When they refer by name/description (e.g. "the groceries task", "mechanic task"), use "task_description" with a keyword. Only one of task_id or task_description should be non-null.
+- Ordinal/relative task references: "last task" / "the last one" -> use "task_id" with value "last". "first task" -> task_id = 1. "second task" / "the second one" -> task_id = 2. "third task" -> task_id = 3. "fourth" -> 4, "fifth" -> 5, and so on. These refer to positions in the last displayed list.
 - Multi-action detection: If the message contains more than one action (separated by commas, "and", "then", "also", periods, semicolons, or newlines), you MUST use the compound intent. Look for multiple verbs/commands — e.g. "remove X, add Y, set Z" is three actions. Never ignore part of a multi-action message.
 - Pronoun references: "it", "that", "this" referring to a previous task cannot be resolved — treat the same as no task reference (task_id and task_description both null). The handler will ask the user to specify.
 - Bare "done"/"finished"/"completed" with no task reference and no "all"/"everything" qualifier: use "done" with both task_id and task_description as null (NOT bulk_done). Only use bulk_done when the user explicitly says "all", "everything", "all tasks", or clearly implies ALL tasks.
