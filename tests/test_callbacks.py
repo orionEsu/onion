@@ -153,19 +153,28 @@ class TestSnoozeCallbacks:
 
     @pytest.mark.asyncio
     async def test_snooze_1h(self, mock_update, mock_context):
-        today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
-        tid = db.add_task("Task", today, "14:00")
+        # Use a fixed "now" before the task's due time so snooze calculates from due time
+        fixed_now = datetime(2026, 3, 10, 13, 0, tzinfo=TIMEZONE)
+        tid = db.add_task("Task", "2026-03-10", "14:00")
         _set_callback(mock_update, f"snooze_1h_{tid}")
-        await handle_callback(mock_update, mock_context)
+        with patch("bot.callbacks.datetime") as mock_dt:
+            mock_dt.now.return_value = fixed_now
+            mock_dt.strptime = datetime.strptime
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            await handle_callback(mock_update, mock_context)
         task = db.get_task(tid)
         assert task["due_time"] == "15:00"
 
     @pytest.mark.asyncio
     async def test_snooze_3h(self, mock_update, mock_context):
-        today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
-        tid = db.add_task("Task", today, "14:00")
+        fixed_now = datetime(2026, 3, 10, 13, 0, tzinfo=TIMEZONE)
+        tid = db.add_task("Task", "2026-03-10", "14:00")
         _set_callback(mock_update, f"snooze_3h_{tid}")
-        await handle_callback(mock_update, mock_context)
+        with patch("bot.callbacks.datetime") as mock_dt:
+            mock_dt.now.return_value = fixed_now
+            mock_dt.strptime = datetime.strptime
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            await handle_callback(mock_update, mock_context)
         task = db.get_task(tid)
         assert task["due_time"] == "17:00"
 

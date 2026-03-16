@@ -823,7 +823,7 @@ def _build_clear_ask_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-async def _send_clear_confirmation(message, scope: str):
+async def _send_clear_confirmation(message, scope: str, excluded_ids: set | None = None):
     """Send the appropriate clear confirmation for a given scope."""
     if scope == "ask" or scope not in CLEAR_LABELS:
         await message.reply_text(
@@ -837,8 +837,17 @@ async def _send_clear_confirmation(message, scope: str):
         InlineKeyboardButton("Yes, clear them", callback_data=f"clear_confirm_{scope}"),
         InlineKeyboardButton("Cancel", callback_data="clear_cancel"),
     ]])
+    skip_note = ""
+    if excluded_ids:
+        today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+        tasks = db.get_tasks_for_date(today)
+        skip_names = ", ".join(
+            escape(t["description"]) for t in tasks if t["id"] in excluded_ids
+        )
+        if skip_names:
+            skip_note = f"\n\n⏭️ <b>Keeping:</b> {skip_names}"
     await message.reply_text(
-        f"⚠️ <b>Are you sure?</b>\n\nThis will permanently delete <b>{CLEAR_LABELS[scope]}</b>.",
+        f"⚠️ <b>Are you sure?</b>\n\nThis will permanently delete <b>{CLEAR_LABELS[scope]}</b>.{skip_note}",
         parse_mode="HTML",
         reply_markup=keyboard,
     )
@@ -1105,6 +1114,14 @@ async def _route_intent(update, context, data: dict, intent: str):
             return await tasks_command(update, context)
 
     elif intent == "done":
+        # If no task reference given, try last reminded task as fallback
+        if not data.get("task_id") and not data.get("task_description"):
+            last_reminded = context.application.bot_data.get("last_reminded_task_id")
+            if last_reminded:
+                fallback_task = db.get_task(last_reminded)
+                if fallback_task and fallback_task["status"] == "pending":
+                    data["task_id"] = last_reminded
+
         task, err, ambiguous = _resolve_task(data, context)
         if err:
             # If no pending match by description, check if it's already done
@@ -1331,12 +1348,42 @@ async def _route_intent(update, context, data: dict, intent: str):
                 f"📋 <b>No {scope_label} pending tasks to move.</b>", parse_mode="HTML",
             )
             return
-        for task in tasks:
+
+        # Filter out excluded tasks
+        exclude_raw = data.get("exclude") or []
+        excluded_ids = set()
+        if exclude_raw:
+            pos_map = context.application.bot_data.get("task_pos_map", {})
+            for exc in exclude_raw:
+                if isinstance(exc, int):
+                    tid = pos_map.get(exc)
+                    if tid:
+                        excluded_ids.add(tid)
+                elif isinstance(exc, str):
+                    kw = exc.lower()
+                    for t in tasks:
+                        if kw in t["description"].lower():
+                            excluded_ids.add(t["id"])
+
+        to_move = [t for t in tasks if t["id"] not in excluded_ids]
+        skipped = [t for t in tasks if t["id"] in excluded_ids]
+
+        if not to_move:
+            await update.message.reply_text(
+                f"📋 <b>All {scope_label} tasks are excluded — nothing to move.</b>", parse_mode="HTML",
+            )
+            return
+
+        for task in to_move:
             store_undo(context, "edit", task["id"], task_to_dict(task))
             db.update_task(task["id"], due_date=target_date)
         human_date = fmt._humanize_date(target_date)
+        skip_msg = ""
+        if skipped:
+            skip_names = ", ".join(escape(t["description"]) for t in skipped)
+            skip_msg = f"\n⏭️ <b>Kept in place:</b> {skip_names}"
         await update.message.reply_text(
-            f"📦 <b>Moved {len(tasks)} {scope_label} task(s) to {human_date}.</b>",
+            f"📦 <b>Moved {len(to_move)} {scope_label} task(s) to {human_date}.</b>{skip_msg}",
             parse_mode="HTML",
         )
 
@@ -1349,28 +1396,64 @@ async def _route_intent(update, context, data: dict, intent: str):
             )
             return
 
+        # Filter out excluded tasks
+        exclude_raw = data.get("exclude") or []
+        excluded_ids = set()
+        if exclude_raw:
+            pos_map = context.application.bot_data.get("task_pos_map", {})
+            for exc in exclude_raw:
+                if isinstance(exc, int):
+                    # Position reference -> resolve to task ID
+                    tid = pos_map.get(exc)
+                    if tid:
+                        excluded_ids.add(tid)
+                elif isinstance(exc, str):
+                    # Description keyword match
+                    kw = exc.lower()
+                    for t in tasks:
+                        if kw in t["description"].lower():
+                            excluded_ids.add(t["id"])
+
+        to_mark = [t for t in tasks if t["id"] not in excluded_ids]
+        skipped = [t for t in tasks if t["id"] in excluded_ids]
+
+        if not to_mark:
+            await update.message.reply_text(
+                "📋 <b>All tasks are excluded — nothing to mark done.</b>", parse_mode="HTML",
+            )
+            return
+
         # Confirm before bulk action if multiple tasks
         pending_bulk = context.user_data.pop("pending_bulk_done", False)
-        if len(tasks) > 1 and not pending_bulk:
+        if len(to_mark) > 1 and not pending_bulk:
             context.user_data["pending_bulk_done"] = True
-            task_list = "\n".join(f"  • {escape(t['description'])}" for t in tasks)
+            context.user_data["bulk_done_excluded_ids"] = excluded_ids
+            task_list = "\n".join(f"  • {escape(t['description'])}" for t in to_mark)
+            skip_note = ""
+            if skipped:
+                skip_names = ", ".join(escape(t["description"]) for t in skipped)
+                skip_note = f"\n\n⏭️ <b>Skipping:</b> {skip_names}"
             keyboard = InlineKeyboardMarkup([[
                 InlineKeyboardButton("✅ Yes, mark all done", callback_data="bulk_done_confirm"),
                 InlineKeyboardButton("❌ Cancel", callback_data="bulk_done_cancel"),
             ]])
             await update.message.reply_text(
-                f"⚠️ <b>Mark all {len(tasks)} task(s) as done?</b>\n\n{task_list}",
+                f"⚠️ <b>Mark {len(to_mark)} task(s) as done?</b>\n\n{task_list}{skip_note}",
                 parse_mode="HTML",
                 reply_markup=keyboard,
             )
             return
 
-        for task in tasks:
+        for task in to_mark:
             db.update_task_status(task["id"], "done")
             if task["recurrence_rule"] and task["recurrence_active"]:
                 db.create_next_occurrence(task["id"])
+        skip_msg = ""
+        if skipped:
+            skip_names = ", ".join(escape(t["description"]) for t in skipped)
+            skip_msg = f"\n⏭️ <b>Skipped:</b> {skip_names}"
         await update.message.reply_text(
-            f"🎉 <b>All done!</b> Marked {len(tasks)} task(s) as completed.", parse_mode="HTML",
+            f"🎉 <b>All done!</b> Marked {len(to_mark)} task(s) as completed.{skip_msg}", parse_mode="HTML",
         )
 
     elif intent == "snooze":
@@ -1438,7 +1521,31 @@ async def _route_intent(update, context, data: dict, intent: str):
         # Map legacy "all" to "all_tasks"
         if scope == "all":
             scope = "all_tasks"
-        await _send_clear_confirmation(update.message, scope)
+
+        # Resolve excluded tasks
+        exclude_raw = data.get("exclude") or []
+        excluded_ids = set()
+        if exclude_raw and scope in ("today", "upcoming"):
+            today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+            if scope == "today":
+                tasks = db.get_tasks_for_date(today)
+            else:
+                tasks = db.get_tasks_for_date(today)  # upcoming starts from today
+            pos_map = context.application.bot_data.get("task_pos_map", {})
+            for exc in exclude_raw:
+                if isinstance(exc, int):
+                    tid = pos_map.get(exc)
+                    if tid:
+                        excluded_ids.add(tid)
+                elif isinstance(exc, str):
+                    kw = exc.lower()
+                    for t in tasks:
+                        if kw in t["description"].lower():
+                            excluded_ids.add(t["id"])
+
+        if excluded_ids:
+            context.user_data["clear_excluded_ids"] = excluded_ids
+        await _send_clear_confirmation(update.message, scope, excluded_ids=excluded_ids)
 
     elif intent == "undo":
         return await undo_command(update, context)
@@ -1514,6 +1621,120 @@ async def _route_intent(update, context, data: dict, intent: str):
 
     elif intent == "help":
         return await help_command(update, context)
+
+    elif intent == "negative":
+        await update.message.reply_text(
+            "👍 <b>OK, no worries.</b> Let me know if you need anything.",
+            parse_mode="HTML",
+        )
+
+    elif intent == "skip_task":
+        # If no task reference given, try last reminded task as fallback
+        if not data.get("task_id") and not data.get("task_description"):
+            last_reminded = context.application.bot_data.get("last_reminded_task_id")
+            if last_reminded:
+                fallback_task = db.get_task(last_reminded)
+                if fallback_task and fallback_task["status"] == "pending":
+                    data["task_id"] = last_reminded
+
+        task = await _resolve_or_ask(update, data, context)
+        if not task:
+            return
+        # Offer to carry over to tomorrow
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("📅 Move to tomorrow", callback_data=f"skip_tomorrow_{task['id']}"),
+            InlineKeyboardButton("🗑️ Delete it", callback_data=f"skip_delete_{task['id']}"),
+            InlineKeyboardButton("🤷 Leave it", callback_data="skip_leave"),
+        ]])
+        await update.message.reply_text(
+            f"📝 <b>Got it</b> — \"{escape(task['description'])}\" isn't done yet.\n\n"
+            f"What would you like to do with it?",
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
+
+    elif intent == "set_reminder":
+        task = await _resolve_or_ask(update, data, context)
+        if not task:
+            return
+
+        reminder_type = data.get("reminder_type")
+        if reminder_type not in ("absolute", "offset", "repeating"):
+            await update.message.reply_text(
+                fmt.format_error("Couldn't understand that reminder type."),
+                parse_mode="HTML",
+            )
+            return
+
+        if reminder_type == "absolute":
+            time_str = data.get("time")
+            date_str = data.get("date") or task["due_date"]
+            if not time_str:
+                await update.message.reply_text(
+                    fmt.format_error("What time should I remind you?"),
+                    parse_mode="HTML",
+                )
+                return
+            fire_at = f"{date_str} {time_str}"
+            try:
+                fire_dt = datetime.strptime(fire_at, "%Y-%m-%d %H:%M").replace(tzinfo=TIMEZONE)
+            except (ValueError, TypeError):
+                await update.message.reply_text(
+                    fmt.format_error("Couldn't understand that date/time."),
+                    parse_mode="HTML",
+                )
+                return
+            if fire_dt <= datetime.now(TIMEZONE):
+                await update.message.reply_text(
+                    fmt.format_error("That time has already passed."),
+                    parse_mode="HTML",
+                )
+                return
+            db.add_custom_reminder(task["id"], "absolute", fire_at=fire_at)
+            await update.message.reply_text(
+                fmt.format_custom_reminder_set(task, "absolute", fire_at=fire_at),
+                parse_mode="HTML",
+            )
+
+        elif reminder_type == "offset":
+            offset = data.get("offset_minutes")
+            if not offset or offset <= 0:
+                await update.message.reply_text(
+                    fmt.format_error("How long before the task should I remind you?"),
+                    parse_mode="HTML",
+                )
+                return
+            if not task["due_time"]:
+                await update.message.reply_text(
+                    fmt.format_error("This task has no due time. Set a time first or use an absolute reminder."),
+                    parse_mode="HTML",
+                )
+                return
+            db.add_custom_reminder(task["id"], "offset", offset_minutes=offset)
+            await update.message.reply_text(
+                fmt.format_custom_reminder_set(task, "offset", offset_minutes=offset),
+                parse_mode="HTML",
+            )
+
+        elif reminder_type == "repeating":
+            interval = data.get("interval_minutes")
+            if not interval or interval <= 0:
+                await update.message.reply_text(
+                    fmt.format_error("How often should I remind you?"),
+                    parse_mode="HTML",
+                )
+                return
+            if not task["due_time"]:
+                await update.message.reply_text(
+                    fmt.format_error("This task has no due time. Repeating reminders need a deadline."),
+                    parse_mode="HTML",
+                )
+                return
+            db.add_custom_reminder(task["id"], "repeating", interval_minutes=interval)
+            await update.message.reply_text(
+                fmt.format_custom_reminder_set(task, "repeating", interval_minutes=interval),
+                parse_mode="HTML",
+            )
 
     else:
         await update.message.reply_text(fmt.format_not_understood(), parse_mode="HTML")

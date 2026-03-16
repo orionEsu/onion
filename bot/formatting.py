@@ -278,6 +278,52 @@ def format_reminder(task, time_label: str, labels: list | None = None) -> str:
     )
 
 
+def format_custom_reminder_set(task, reminder_type: str, **kwargs) -> str:
+    desc = escape(task["description"])
+    if reminder_type == "absolute":
+        fire_at = kwargs.get("fire_at", "")
+        # Parse "YYYY-MM-DD HH:MM" to readable format
+        try:
+            dt = datetime.strptime(fire_at, "%Y-%m-%d %H:%M")
+            time_str = dt.strftime("%H:%M")
+            date_str = _humanize_date(dt.strftime("%Y-%m-%d"))
+            when = f"at <b>{time_str}</b> {date_str}"
+        except (ValueError, TypeError):
+            when = f"at {fire_at}"
+        return f"🔔 <b>Reminder set</b> for \"{desc}\" — {when}"
+    elif reminder_type == "offset":
+        mins = kwargs.get("offset_minutes", 0)
+        if mins >= 60:
+            h = mins // 60
+            m = mins % 60
+            label = f"{h}h {m}m" if m else f"{h} hour{'s' if h > 1 else ''}"
+        else:
+            label = f"{mins} minute{'s' if mins != 1 else ''}"
+        return f"🔔 <b>Reminder set</b> for \"{desc}\" — <b>{label}</b> before due time"
+    elif reminder_type == "repeating":
+        mins = kwargs.get("interval_minutes", 0)
+        if mins >= 60:
+            h = mins // 60
+            m = mins % 60
+            label = f"{h}h {m}m" if m else f"{h} hour{'s' if h > 1 else ''}"
+        else:
+            label = f"{mins} minute{'s' if mins != 1 else ''}"
+        return f"🔔 <b>Reminder set</b> for \"{desc}\" — every <b>{label}</b> until due"
+    return f"🔔 <b>Reminder set</b> for \"{desc}\""
+
+
+def format_custom_reminder_notification(task, reminder_type: str, labels: list | None = None) -> str:
+    desc = escape(task["description"])
+    lbls = _label_badges(labels)
+    due_time = task["due_time"]
+    if due_time:
+        due_info = f"\n📅 {_humanize_date(task['due_date'])} at {due_time}{lbls}"
+    else:
+        due_info = f"\n📅 {_humanize_date(task['due_date'])}{lbls}"
+    prefix = "🔔 <b>Custom Reminder!</b>"
+    return f"{prefix}\n\n📝 \"{desc}\"{due_info}"
+
+
 # ── Labels ─────────────────────────────────────────────────────────
 
 def format_labels_list(labels: list) -> str:

@@ -462,7 +462,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         valid = ("today", "upcoming", "all_tasks", "all_labels", "everything")
         if scope not in valid:
             return
-        count = db.clear_tasks(scope)
+        excluded_ids = context.user_data.pop("clear_excluded_ids", set())
+        if excluded_ids and scope in ("today", "upcoming"):
+            count = db.clear_tasks_except(scope, excluded_ids)
+        else:
+            count = db.clear_tasks(scope)
         scope_labels = {
             "today": "today's", "upcoming": "upcoming",
             "all_tasks": "all", "all_labels": "all",
@@ -476,6 +480,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif data == "clear_cancel":
+        context.user_data.pop("clear_excluded_ids", None)
         await query.edit_message_text("👍 <b>Clear cancelled.</b> Nothing was deleted.", parse_mode="HTML")
 
     # ── Bulk done confirmation ──
@@ -488,14 +493,56 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "📋 <b>No pending tasks for today.</b>", parse_mode="HTML",
             )
             return
-        for task in tasks:
+        excluded_ids = context.user_data.pop("bulk_done_excluded_ids", set())
+        to_mark = [t for t in tasks if t["id"] not in excluded_ids]
+        if not to_mark:
+            await query.edit_message_text(
+                "📋 <b>No tasks to mark done.</b>", parse_mode="HTML",
+            )
+            return
+        for task in to_mark:
             db.update_task_status(task["id"], "done")
             if task["recurrence_rule"] and task["recurrence_active"]:
                 db.create_next_occurrence(task["id"])
         await query.edit_message_text(
-            f"🎉 <b>All done!</b> Marked {len(tasks)} task(s) as completed.", parse_mode="HTML",
+            f"🎉 <b>All done!</b> Marked {len(to_mark)} task(s) as completed.", parse_mode="HTML",
         )
 
     elif data == "bulk_done_cancel":
         context.user_data.pop("pending_bulk_done", None)
+        context.user_data.pop("bulk_done_excluded_ids", None)
         await query.edit_message_text("👍 <b>OK, no changes made.</b>", parse_mode="HTML")
+
+    # ── Skip task actions ──
+
+    elif data.startswith("skip_tomorrow_"):
+        task_id = int(data.removeprefix("skip_tomorrow_"))
+        task = db.get_task(task_id)
+        if not task:
+            await query.edit_message_text("❌ Task not found.", parse_mode="HTML")
+            return
+        tomorrow = (datetime.now(TIMEZONE) + timedelta(days=1)).strftime("%Y-%m-%d")
+        db.carry_over_task(task_id, tomorrow, task["due_time"])
+        from html import escape
+        await query.edit_message_text(
+            f"📅 <b>Moved to tomorrow:</b> \"{escape(task['description'])}\"",
+            parse_mode="HTML",
+        )
+
+    elif data.startswith("skip_delete_"):
+        task_id = int(data.removeprefix("skip_delete_"))
+        task = db.get_task(task_id)
+        if not task:
+            await query.edit_message_text("❌ Task not found.", parse_mode="HTML")
+            return
+        from html import escape
+        db.delete_task(task_id)
+        await query.edit_message_text(
+            f"🗑️ <b>Deleted:</b> \"{escape(task['description'])}\"",
+            parse_mode="HTML",
+        )
+
+    elif data == "skip_leave":
+        await query.edit_message_text(
+            "👍 <b>OK, leaving it as is.</b>", parse_mode="HTML",
+        )

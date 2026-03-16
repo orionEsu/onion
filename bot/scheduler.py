@@ -35,8 +35,8 @@ def schedule_jobs(application: Application) -> None:
     )
     job_queue.run_daily(send_daily_review, time=review_time, name="daily_review")
 
-    # Reminder check every 15 minutes
-    job_queue.run_repeating(check_reminders, interval=900, first=10, name="reminder_check")
+    # Reminder check every 5 minutes
+    job_queue.run_repeating(check_reminders, interval=300, first=10, name="reminder_check")
 
     # Morning prompt auto-timeout (2 hours after morning prompt)
     timeout_hour = (MORNING_PROMPT_HOUR + 2) % 24
@@ -64,7 +64,7 @@ def schedule_jobs(application: Application) -> None:
 
     logger.info(
         "Scheduled: morning prompt at %02d:%02d, daily review at %02d:%02d, "
-        "reminders every 15 min, weekly summary, daily backup",
+        "reminders every 5 min, weekly summary, daily backup",
         MORNING_PROMPT_HOUR, MORNING_PROMPT_MINUTE,
         DAILY_REVIEW_HOUR, DAILY_REVIEW_MINUTE,
     )
@@ -92,6 +92,7 @@ def _format_time_remaining(total_minutes: int) -> str:
 async def _check_reminders_inner(context) -> None:
     now = datetime.now(TIMEZONE)
 
+    # Phase 1: Global offsets
     for offset in REMINDER_OFFSETS:
         tasks = db.get_tasks_needing_reminder(offset, now)
         if not tasks:
@@ -119,6 +120,70 @@ async def _check_reminders_inner(context) -> None:
                 reply_markup=keyboard,
             )
             db.mark_reminder_sent(task["id"], offset)
+            # Store last reminded task so "already done" / "I did that" can resolve it
+            context.application.bot_data["last_reminded_task_id"] = task["id"]
+
+    # Phase 2: Custom per-task reminders
+    await _check_custom_reminders(context, now)
+
+
+async def _check_custom_reminders(context, now: datetime) -> None:
+    """Check and fire all pending custom reminders (absolute, offset, repeating)."""
+
+    def _snooze_keyboard(tid):
+        return InlineKeyboardMarkup([[
+            InlineKeyboardButton("😴 1h", callback_data=f"snooze_1h_{tid}"),
+            InlineKeyboardButton("😴 3h", callback_data=f"snooze_3h_{tid}"),
+            InlineKeyboardButton("📅 Tomorrow", callback_data=f"snooze_tomorrow_{tid}"),
+        ]])
+
+    # Absolute reminders
+    for row in db.get_pending_absolute_reminders(now):
+        tid = row["task_id"]
+        labels = db.get_labels_for_task(tid)
+        task = db.get_task(tid)
+        if not task:
+            continue
+        await context.bot.send_message(
+            chat_id=AUTHORIZED_USER_ID,
+            text=fmt.format_custom_reminder_notification(task, "absolute", labels),
+            parse_mode="HTML",
+            reply_markup=_snooze_keyboard(tid),
+        )
+        db.mark_custom_reminder_fired(row["id"])
+        context.application.bot_data["last_reminded_task_id"] = tid
+
+    # Offset reminders
+    for row in db.get_pending_offset_reminders(now):
+        tid = row["task_id"]
+        labels = db.get_labels_for_task(tid)
+        task = db.get_task(tid)
+        if not task:
+            continue
+        await context.bot.send_message(
+            chat_id=AUTHORIZED_USER_ID,
+            text=fmt.format_custom_reminder_notification(task, "offset", labels),
+            parse_mode="HTML",
+            reply_markup=_snooze_keyboard(tid),
+        )
+        db.mark_custom_reminder_fired(row["id"])
+        context.application.bot_data["last_reminded_task_id"] = tid
+
+    # Repeating reminders
+    for row in db.get_pending_repeating_reminders(now):
+        tid = row["task_id"]
+        labels = db.get_labels_for_task(tid)
+        task = db.get_task(tid)
+        if not task:
+            continue
+        await context.bot.send_message(
+            chat_id=AUTHORIZED_USER_ID,
+            text=fmt.format_custom_reminder_notification(task, "repeating", labels),
+            parse_mode="HTML",
+            reply_markup=_snooze_keyboard(tid),
+        )
+        db.mark_custom_reminder_fired(row["id"], fired_at=now.strftime("%Y-%m-%d %H:%M"))
+        context.application.bot_data["last_reminded_task_id"] = tid
 
 
 async def end_morning_prompt_timeout(context) -> None:

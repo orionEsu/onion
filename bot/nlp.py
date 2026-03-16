@@ -35,10 +35,11 @@ Examples: "show my tasks", "what's on today", "upcoming tasks", "show work tasks
 "show history" / "task history" / "full history this week" / "show all activity" -> query_type: "history" (extract period if mentioned, default "week")
 "what do I have on Friday" / "show me Monday's tasks" / "tasks for March 15" / "am I free tomorrow" -> query_type: "date", query_date: "YYYY-MM-DD" (resolve the date)
 
-3. MARK TASK DONE:
+3. MARK TASK DONE (single task):
 {{ "intent": "done", "task_id": 5, "task_description": null }}
 Examples: "mark task 5 as done", "I finished task 5", "done with #5", "completed task 5", "finished the groceries task"
 Use task_id if the user gives a number. Use task_description (a keyword from the task name) if they refer to a task by name.
+This is for a SINGLE specific task. If the user says "all", "everything", "all tasks", or implies bulk completion (with or without exclusions), use bulk_done (intent #22) instead.
 
 4. DELETE TASK:
 {{ "intent": "delete", "task_id": 3, "task_description": null }}
@@ -97,9 +98,12 @@ Examples: "undo", "undo that", "revert", "take that back"
 Examples: "backup my data", "send me the database", "export my tasks"
 
 17. CLEAR TASKS:
-{{ "intent": "clear", "scope": "today" or "upcoming" or "all_tasks" or "all_labels" or "everything" or "ask" }}
+{{ "intent": "clear", "scope": "today" or "upcoming" or "all_tasks" or "all_labels" or "everything" or "ask", "exclude": [] }}
 Examples: "clear today's tasks" -> scope "today". "clear all upcoming tasks" -> scope "upcoming". "clear all tasks"/"delete all tasks"/"wipe all tasks" -> scope "all_tasks". "clear all labels"/"delete all labels" -> scope "all_labels". "wipe everything"/"clear everything"/"nuke it all" -> scope "everything". "clear all"/"clear" (ambiguous, no specific target) -> scope "ask".
+"clear today's tasks but not the meeting" -> scope "today", exclude: ["meeting"]
+"clear today's tasks except task 2" -> scope "today", exclude: [2]
 "today" = only today's pending tasks. "upcoming" = all pending tasks from today onwards. "all_tasks" = every task including completed. "all_labels" = all labels. "everything" = tasks AND labels. "ask" = user said "clear all" or just "clear" without specifying what — ask them.
+"exclude" is an array of task_ids (numbers) or task_description keywords (strings) that should NOT be cleared. Words like "but", "except", "not", "other than", "besides", "apart from" before a task reference signal exclusion — do NOT treat the excluded task as a separate action.
 
 18. COMPOUND ACTIONS (multiple things in one message):
 {{ "intent": "compound", "actions": [action1, action2, ...] }}
@@ -112,6 +116,10 @@ Examples:
 - "buy milk tomorrow and call dentist on Monday" -> compound with two add_task actions
 - "finish the groceries task. also add buy shoes on Saturday" -> compound with done + add_task
 - "add gym at 6am then mark task 1 done" -> compound with add_task + done
+IMPORTANT: Do NOT use compound when a bulk intent (bulk_done, move_remaining, clear) has an exclusion clause. "but", "except", "not", "other than", "besides", "apart from" followed by a task reference in the context of a bulk action signals EXCLUSION, not a separate action. Use the bulk intent's "exclude" field instead. Examples:
+- "mark all done but the groceries task" -> bulk_done with exclude (NOT compound)
+- "move tasks to tomorrow except task 3" -> move_remaining with exclude (NOT compound)
+- "clear today's tasks but not the meeting" -> clear with exclude (NOT compound)
 
 19. HELP:
 {{ "intent": "help" }}
@@ -125,16 +133,23 @@ Examples: "add drink water to my routine at 7am" -> action "add", description "D
 "add devotion to my routine" -> action "add", description "Devotion", target_time null
 
 21. MOVE REMAINING TASKS (bulk move):
-{{ "intent": "move_remaining", "scope": "today" or "overdue" or "all", "target_date": "YYYY-MM-DD" }}
+{{ "intent": "move_remaining", "scope": "today" or "overdue" or "all", "target_date": "YYYY-MM-DD", "exclude": [] }}
 Examples: "move remaining tasks to tomorrow", "push today's tasks to Monday", "carry over everything to tomorrow" -> scope "today"
 "move overdue tasks to today", "reschedule all overdue to today", "bring overdue tasks forward" -> scope "overdue", target_date = today
 "move all tasks to tomorrow", "move all my tasks to Monday", "push everything to next week" -> scope "all" (both today + overdue)
+"move remaining tasks to tomorrow but not task 3" -> exclude: [3]
+"push today's tasks to Monday except the dentist task" -> exclude: ["dentist"]
 scope "today" = pending tasks due today. scope "overdue" = overdue tasks only. scope "all" = today's + overdue combined. target_date follows the same date rules as add_task.
+"exclude" is an array of task_ids (numbers) or task_description keywords (strings) that should NOT be moved. Words like "but", "except", "not", "other than", "besides", "apart from" before a task reference signal exclusion — do NOT treat the excluded task as a separate action.
 
 22. MARK ALL TASKS DONE (bulk done):
-{{ "intent": "bulk_done", "scope": "today" }}
+{{ "intent": "bulk_done", "scope": "today", "exclude": [] }}
 Examples: "mark all tasks as done", "I'm done for today", "finished everything today", "done with all tasks", "completed all tasks"
-scope is always "today". This marks ALL pending tasks for today as done.
+"mark all tasks done but pick up cloth from tailor" -> exclude: ["pick up cloth from tailor"]
+"mark all done except task 3 and the groceries task" -> exclude: [3, "groceries"]
+"done with everything but task 1" -> exclude: [1]
+scope is always "today". This marks ALL pending tasks for today as done EXCEPT those in "exclude".
+"exclude" is an array of task_ids (numbers) or task_description keywords (strings) that should NOT be marked done. Words like "but", "except", "not", "other than", "besides", "apart from" before a task reference signal exclusion — do NOT treat the excluded task as a separate add_task or compound action.
 
 23. SNOOZE TASK:
 {{ "intent": "snooze", "task_id": 5, "task_description": null, "duration": "1h" or "2h" or "3h" or "tomorrow" }}
@@ -148,7 +163,37 @@ Examples: "hi", "hello", "hey", "good morning", "good evening" -> type "hello"
 "bye", "goodbye", "see you", "good night", "gn" -> type "goodbye"
 Only use this for messages that are PURELY greetings/casual with NO task-related content.
 
-25. UNKNOWN:
+25. NEGATIVE / REFUSAL:
+{{ "intent": "negative" }}
+Examples: "no", "nah", "not yet", "nope", "cancel", "never mind", "forget it", "skip", "not now"
+Use this when the user is declining, refusing, or dismissing something — NOT when they are describing a task. "no I didn't call him" with task context could be skip_task (see #26), but a bare "no" or "nah" is negative.
+
+26. SKIP TASK (acknowledge not done):
+{{ "intent": "skip_task", "task_id": 5, "task_description": null }}
+Examples: "I didn't do task 3", "I couldn't finish the groceries task", "skip task 5", "I didn't get to task 2", "couldn't do the laundry"
+This is the OPPOSITE of "done" — the user is saying they did NOT complete a task. Do NOT classify this as "done". Use task_id or task_description like other task intents.
+
+27. SET CUSTOM REMINDER:
+{{ "intent": "set_reminder", "task_id": 2, "task_description": null, "reminder_type": "absolute" or "offset" or "repeating", "time": "14:00" or null, "date": "YYYY-MM-DD" or null, "offset_minutes": 120 or null, "interval_minutes": 30 or null }}
+Examples:
+"remind me of task 2 at 2pm" -> reminder_type "absolute", time "14:00", date = task's due_date
+"remind me of task 2 at 8:30am tomorrow" -> reminder_type "absolute", time "08:30", date "YYYY-MM-DD"
+"set a reminder for the groceries task at 10am tomorrow" -> reminder_type "absolute", time "10:00", date "YYYY-MM-DD"
+"remind me of task 2, 2 hours before" / "remind me 2hrs to the time" -> reminder_type "offset", offset_minutes 120
+"remind me of task 3 an hour before it's due" -> reminder_type "offset", offset_minutes 60
+"remind me 15 minutes before task 5" -> reminder_type "offset", offset_minutes 15
+"remind me 45 mins before the meeting task" -> reminder_type "offset", offset_minutes 45
+"remind me 3 hours before task 1" -> reminder_type "offset", offset_minutes 180
+"remind me every 30 minutes until the time" / "ping me every 30 mins about task 4" -> reminder_type "repeating", interval_minutes 30
+"remind me at 30 mins interval till the time" / "remind me every 30 mins till due" -> reminder_type "repeating", interval_minutes 30
+"remind me every 10 minutes about task 2" -> reminder_type "repeating", interval_minutes 10
+"remind me every hour about the deadline task" -> reminder_type "repeating", interval_minutes 60
+"ping me every 20 mins about task 1 until due" -> reminder_type "repeating", interval_minutes 20
+offset_minutes and interval_minutes are always in MINUTES. Convert hours to minutes (1h=60, 2h=120, 3h=180, etc). Any positive number is valid.
+The reminder is for an EXISTING task. Use task_id or task_description like other intents.
+IMPORTANT: Distinguish from add_task ("remind me TO X" = new task) and snooze ("remind me ABOUT task N" with no time = snooze). set_reminder requires a time/offset/interval specification for an existing task.
+
+28. UNKNOWN:
 {{ "intent": "unknown" }}
 
 IMPORTANT: Always respond with a SINGLE valid JSON object. Never output multiple JSON objects or extra text.
@@ -164,7 +209,11 @@ RULES:
 - Available labels: {labels}
 - confidence: 1.0 = very certain, lower if ambiguous.
 - Task references: When the user says a number (e.g. "task 3", "remove 2"), use "task_id" with that number — it refers to the position in the last displayed list. When they refer by name/description (e.g. "the groceries task", "mechanic task"), use "task_description" with a keyword. Only one of task_id or task_description should be non-null.
-- Multi-action detection: If the message contains more than one action (separated by commas, "and", "then", "also", periods, semicolons, or newlines), you MUST use the compound intent. Look for multiple verbs/commands — e.g. "remove X, add Y, set Z" is three actions. Never ignore part of a multi-action message."""
+- Multi-action detection: If the message contains more than one action (separated by commas, "and", "then", "also", periods, semicolons, or newlines), you MUST use the compound intent. Look for multiple verbs/commands — e.g. "remove X, add Y, set Z" is three actions. Never ignore part of a multi-action message.
+- Pronoun references: "it", "that", "this" referring to a previous task cannot be resolved — treat the same as no task reference (task_id and task_description both null). The handler will ask the user to specify.
+- Bare "done"/"finished"/"completed" with no task reference and no "all"/"everything" qualifier: use "done" with both task_id and task_description as null (NOT bulk_done). Only use bulk_done when the user explicitly says "all", "everything", "all tasks", or clearly implies ALL tasks.
+- "I didn't do X" / "couldn't finish X" / "skip X": use skip_task (intent #26), NOT done. The word "didn't", "couldn't", "haven't", "wasn't able to", "failed to", "skip" before a task reference means NOT completed.
+- "remind me to X" = add_task (creating a new task). "remind me about task N" / "remind me about the X task" = snooze (rescheduling an existing task). The difference is "to" (new action) vs "about" (existing task)."""
 
 MORNING_SYSTEM_PROMPT = """You are a task extraction assistant. The user is listing tasks for today in response to a morning planning prompt.
 

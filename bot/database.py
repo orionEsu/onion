@@ -184,6 +184,20 @@ def init_db() -> None:
                 "SELECT id, 120 FROM tasks WHERE reminder_2h = 1"
             )
 
+        # Per-task custom reminders
+        conn.execute("""CREATE TABLE IF NOT EXISTS task_custom_reminders (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id          INTEGER NOT NULL,
+            type             TEXT    NOT NULL,
+            fire_at          TEXT    DEFAULT NULL,
+            offset_minutes   INTEGER DEFAULT NULL,
+            interval_minutes INTEGER DEFAULT NULL,
+            last_fired_at    TEXT    DEFAULT NULL,
+            fired            INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+        )""")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_custom_reminders_task ON task_custom_reminders(task_id)")
+
         # Indexes for common queries
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_date_status ON tasks(due_date, status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)")
@@ -300,6 +314,103 @@ def clear_reminders_for_task(task_id: int) -> None:
     """Clear all sent reminders for a task (used when rescheduling)."""
     with _conn() as conn:
         conn.execute("DELETE FROM reminders_sent WHERE task_id = ?", (task_id,))
+        conn.execute("DELETE FROM task_custom_reminders WHERE task_id = ?", (task_id,))
+
+
+# ── Custom per-task reminders ────────────────────────────────────
+
+
+def add_custom_reminder(
+    task_id: int, type: str, *, fire_at: str | None = None,
+    offset_minutes: int | None = None, interval_minutes: int | None = None,
+) -> int:
+    with _conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO task_custom_reminders (task_id, type, fire_at, offset_minutes, interval_minutes) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (task_id, type, fire_at, offset_minutes, interval_minutes),
+        )
+        return cur.lastrowid
+
+
+def get_custom_reminders_for_task(task_id: int) -> list[sqlite3.Row]:
+    with _conn() as conn:
+        return conn.execute(
+            "SELECT * FROM task_custom_reminders WHERE task_id = ?", (task_id,),
+        ).fetchall()
+
+
+def get_pending_absolute_reminders(now: datetime) -> list[sqlite3.Row]:
+    """Unfired absolute reminders whose fire_at time has been reached, for pending tasks."""
+    with _conn() as conn:
+        return conn.execute(
+            "SELECT r.*, t.description, t.due_date, t.due_time "
+            "FROM task_custom_reminders r JOIN tasks t ON r.task_id = t.id "
+            "WHERE r.type = 'absolute' AND r.fired = 0 AND t.status = 'pending' "
+            "AND r.fire_at <= ?",
+            (now.strftime("%Y-%m-%d %H:%M"),),
+        ).fetchall()
+
+
+def get_pending_offset_reminders(now: datetime) -> list[sqlite3.Row]:
+    """Unfired offset reminders where (due_time - offset) has been reached, for pending tasks with a due_time."""
+    with _conn() as conn:
+        return conn.execute(
+            "SELECT r.*, t.description, t.due_date, t.due_time "
+            "FROM task_custom_reminders r JOIN tasks t ON r.task_id = t.id "
+            "WHERE r.type = 'offset' AND r.fired = 0 AND t.status = 'pending' "
+            "AND t.due_time IS NOT NULL "
+            "AND datetime(t.due_date || ' ' || t.due_time, '-' || r.offset_minutes || ' minutes') <= ?",
+            (now.strftime("%Y-%m-%d %H:%M"),),
+        ).fetchall()
+
+
+def get_pending_repeating_reminders(now: datetime) -> list[sqlite3.Row]:
+    """Repeating reminders that should fire: interval elapsed since last fire, and due time not yet passed."""
+    now_str = now.strftime("%Y-%m-%d %H:%M")
+    with _conn() as conn:
+        return conn.execute(
+            "SELECT r.*, t.description, t.due_date, t.due_time "
+            "FROM task_custom_reminders r JOIN tasks t ON r.task_id = t.id "
+            "WHERE r.type = 'repeating' AND r.fired = 0 AND t.status = 'pending' "
+            "AND t.due_time IS NOT NULL "
+            "AND (t.due_date || ' ' || t.due_time) > ? "
+            "AND ("
+            "  r.last_fired_at IS NULL "
+            "  OR datetime(r.last_fired_at, '+' || r.interval_minutes || ' minutes') <= ?"
+            ")",
+            (now_str, now_str),
+        ).fetchall()
+
+
+def mark_custom_reminder_fired(reminder_id: int, fired_at: str | None = None) -> None:
+    """For absolute/offset: set fired=1. For repeating: update last_fired_at."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT type FROM task_custom_reminders WHERE id = ?", (reminder_id,),
+        ).fetchone()
+        if not row:
+            return
+        if row["type"] == "repeating":
+            ts = fired_at or datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M")
+            conn.execute(
+                "UPDATE task_custom_reminders SET last_fired_at = ? WHERE id = ?",
+                (ts, reminder_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE task_custom_reminders SET fired = 1 WHERE id = ?",
+                (reminder_id,),
+            )
+
+
+def mark_repeating_reminder_done(reminder_id: int) -> None:
+    """Mark a repeating reminder as fully done (no more fires)."""
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE task_custom_reminders SET fired = 1 WHERE id = ?",
+            (reminder_id,),
+        )
 
 
 def mark_reviewed(task_id: int) -> None:
@@ -435,6 +546,30 @@ def clear_tasks(scope: str) -> int:
             return t + l
         else:
             return 0
+
+
+def clear_tasks_except(scope: str, exclude_ids: set[int]) -> int:
+    """Delete tasks by scope, excluding specific task IDs. Returns count of deleted items."""
+    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+    if not exclude_ids:
+        return clear_tasks(scope)
+    placeholders = ",".join("?" for _ in exclude_ids)
+    with _conn() as conn:
+        if scope == "today":
+            cur = conn.execute(
+                f"DELETE FROM tasks WHERE due_date = ? AND status = 'pending' AND id NOT IN ({placeholders})",
+                (today, *exclude_ids),
+            )
+            return cur.rowcount
+        elif scope == "upcoming":
+            cur = conn.execute(
+                f"DELETE FROM tasks WHERE due_date >= ? AND status = 'pending' AND id NOT IN ({placeholders})",
+                (today, *exclude_ids),
+            )
+            return cur.rowcount
+        else:
+            # For all_tasks/all_labels/everything, exclusion not supported — fall back
+            return clear_tasks(scope)
 
 
 def find_tasks_by_description(query: str) -> list[sqlite3.Row]:
