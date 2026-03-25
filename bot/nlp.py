@@ -85,7 +85,8 @@ Examples: "remove social label from task 3", "untag task 3 from Work"
 
 14. EDIT TASK:
 {{ "intent": "edit_task", "task_id": 5, "task_description": null, "new_description": null, "new_date": "YYYY-MM-DD" or null, "new_time": "HH:MM" or null, "reason": "move" or "rename" or "edit" }}
-Examples: "move task 5 to Friday", "rename task 3 to Buy milk", "change task 5 time to 3pm", "reschedule task 2 to next Monday", "carry over task 2 to tomorrow", "push task 4 to next week", "postpone task 3", "shift task 1 to evening", "bump task 6 to Monday", "move the groceries task to Friday"
+Examples: "move task 5 to Friday", "rename task 3 to Buy milk", "change task 5 time to 3pm", "reschedule task 2 to next Monday", "carry over task 2 to tomorrow", "push task 4 to next week", "postpone task 3", "shift task 1 to evening", "bump task 6 to Monday", "move the groceries task to Friday", "pump water should be at 1pm", "the meeting should be at 3pm", "gym should be in the morning"
+IMPORTANT: If the user says "[existing task name] should be at [time/date]" or "[existing task name] at [time] not [time]", this is editing an existing task, NOT adding a new one. Use task_description to reference by name.
 At least one of new_description, new_date, new_time must be non-null. Use the same date/time rules as add_task.
 "reason" reflects the user's intent: "move" for carry over/reschedule/push/postpone/shift/bump/defer/delay/move, "rename" for changing description/rename/reword, "edit" for everything else.
 

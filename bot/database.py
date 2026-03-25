@@ -126,6 +126,8 @@ def init_db() -> None:
             conn.execute("ALTER TABLE tasks ADD COLUMN parent_task_id INTEGER DEFAULT NULL")
         if "notes" not in columns:
             conn.execute("ALTER TABLE tasks ADD COLUMN notes TEXT DEFAULT NULL")
+        if "scheduled_time" not in columns:
+            conn.execute("ALTER TABLE tasks ADD COLUMN scheduled_time TEXT DEFAULT NULL")
 
         # Labels table
         conn.execute("""CREATE TABLE IF NOT EXISTS labels (
@@ -237,15 +239,19 @@ def _validate_recurrence_rule(rule: str | None) -> str | None:
 
 def add_task(description: str, due_date: str, due_time: str | None,
              recurrence_rule: str | None = None, parent_task_id: int | None = None,
-             notes: str | None = None) -> int:
+             notes: str | None = None, scheduled_time: str | None = None) -> int:
     recurrence_rule = _validate_recurrence_rule(recurrence_rule)
     now = datetime.now(TIMEZONE).isoformat()
     active = 1 if recurrence_rule else 0
+    # For recurring tasks, store the canonical scheduled time
+    sched = scheduled_time or (due_time if recurrence_rule else None)
     with _conn() as conn:
         cur = conn.execute(
             "INSERT INTO tasks (description, due_date, due_time, recurrence_rule, "
-            "recurrence_active, parent_task_id, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (description, due_date, due_time, recurrence_rule, active, parent_task_id, notes, now),
+            "recurrence_active, parent_task_id, notes, scheduled_time, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (description, due_date, due_time, recurrence_rule, active,
+             parent_task_id, notes, sched, now),
         )
         return cur.lastrowid
 
@@ -457,6 +463,11 @@ def update_task(task_id: int, description: str | None = None,
         sets.append("due_time = ?")
         params.append(due_time)
         reset_reminders = True
+        # If this is a recurring task, also update the canonical scheduled_time
+        task = get_task(task_id)
+        if task and task["recurrence_rule"]:
+            sets.append("scheduled_time = ?")
+            params.append(due_time)
     if not sets:
         return False
     params.append(task_id)
@@ -721,13 +732,16 @@ def create_next_occurrence(task_id: int) -> int | None:
         return None
     parent = task["parent_task_id"] or task_id
 
+    # Use scheduled_time (original recurring time) if available, fall back to due_time
+    original_time = task["scheduled_time"] or task["due_time"]
     new_id = add_task(
         description=task["description"],
         due_date=next_date,
-        due_time=task["due_time"],
+        due_time=original_time,
         recurrence_rule=task["recurrence_rule"],
         parent_task_id=parent,
         notes=task["notes"],
+        scheduled_time=original_time,
     )
 
     # Copy labels from the original task in one query
