@@ -547,10 +547,11 @@ def format_completed(tasks: list, period_label: str, labels_map: dict | None = N
 def format_disambiguate(tasks: list) -> str:
     """Ask the user to pick from multiple matching tasks."""
     lines = ["🤔 <b>Multiple tasks match. Which one?</b>\n"]
-    for t in tasks:
+    for i, t in enumerate(tasks, 1):
         time_str = f" at {t['due_time']}" if _safe_get(t, "due_time") else ""
-        lines.append(f"  <b>#{t['id']}</b> — {escape(t['description'])}{time_str} — {_humanize_date(t['due_date'])}")
-    lines.append("\n<i>Reply with the task number, e.g. \"task 3\"</i>")
+        recur = " 🔄" if _safe_get(t, "recurrence_rule") else ""
+        lines.append(f"  <b>{i}.</b> {escape(t['description'])}{time_str} — {_humanize_date(t['due_date'])}{recur}")
+    lines.append(f"\n<i>Reply with 1–{len(tasks)}</i>")
     return "\n".join(lines)
 
 

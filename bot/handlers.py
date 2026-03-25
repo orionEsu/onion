@@ -1,5 +1,6 @@
 import functools
 import logging
+import re
 import sqlite3
 from datetime import datetime, timedelta
 from html import escape
@@ -870,6 +871,36 @@ async def handle_natural_language(update: Update, context: ContextTypes.DEFAULT_
     # Clear stale confirmation states from previous interactions
     context.user_data.pop("pending_bulk_done", None)
 
+    # Check if user is picking from a disambiguation prompt
+    pending = context.user_data.get("pending_disambiguation")
+    if pending:
+        text = (update.message.text or "").strip()
+        # Match: "1", "#1", "task 1", "#29" (DB id), "29"
+        m = re.match(r"^#?(?:task\s*)?(\d+)$", text, re.IGNORECASE)
+        if m:
+            pick = int(m.group(1))
+            tasks = pending["tasks"]
+            # First try as a sequential pick (1-based index shown in prompt)
+            if 1 <= pick <= len(tasks):
+                chosen = tasks[pick - 1]
+            else:
+                # Fall back to matching by DB id
+                chosen = next((t for t in tasks if t["id"] == pick), None)
+            if chosen:
+                context.user_data.pop("pending_disambiguation")
+                data = pending["data"].copy()
+                data["task_id"] = chosen["id"]
+                data.pop("task_description", None)
+                return await _route_intent(update, context, data, pending["intent"])
+            else:
+                await update.message.reply_text(
+                    fmt.format_error(f"Invalid pick. Reply with 1–{len(tasks)}."),
+                    parse_mode="HTML",
+                )
+                return
+        # Not a number — clear disambiguation and fall through to normal NLP
+        context.user_data.pop("pending_disambiguation", None)
+
     # Check if user is replying with a new time for a past-time task
     if context.user_data.get("pending_past_task"):
         parsed = context.user_data.get("pending_past_task")
@@ -1050,13 +1081,19 @@ def _resolve_task(data: dict, context=None):
     return None, "Which task? Give me a task number or name.", None
 
 
-async def _resolve_or_ask(update, data: dict, context=None):
+async def _resolve_or_ask(update, data: dict, context=None, intent: str = None):
     """Resolve task or send disambiguation/error. Returns task or None."""
     task, err, ambiguous = _resolve_task(data, context)
     if err:
         await update.message.reply_text(fmt.format_error(err), parse_mode="HTML")
         return None
     if ambiguous:
+        if context:
+            context.user_data["pending_disambiguation"] = {
+                "tasks": ambiguous,
+                "intent": intent or data.get("intent", "unknown"),
+                "data": data,
+            }
         await update.message.reply_text(fmt.format_disambiguate(ambiguous), parse_mode="HTML")
         return None
     return task
@@ -1172,7 +1209,7 @@ async def _route_intent(update, context, data: dict, intent: str):
         await update.message.reply_text(msg, parse_mode="HTML")
 
     elif intent == "delete":
-        task = await _resolve_or_ask(update, data, context)
+        task = await _resolve_or_ask(update, data, context, intent=intent)
         if not task:
             return
         task_date = task["due_date"]
@@ -1226,7 +1263,7 @@ async def _route_intent(update, context, data: dict, intent: str):
         await update.message.reply_text(f"🗑️ Label <b>{escape(name)}</b> deleted.", parse_mode="HTML")
 
     elif intent == "stop_recur":
-        task = await _resolve_or_ask(update, data, context)
+        task = await _resolve_or_ask(update, data, context, intent=intent)
         if not task:
             return
         if not task["recurrence_rule"]:
@@ -1238,14 +1275,14 @@ async def _route_intent(update, context, data: dict, intent: str):
         )
 
     elif intent == "view_task":
-        task = await _resolve_or_ask(update, data, context)
+        task = await _resolve_or_ask(update, data, context, intent=intent)
         if not task:
             return
         labels = db.get_labels_for_task(task["id"])
         await update.message.reply_text(fmt.format_task_detail(task, labels), parse_mode="HTML")
 
     elif intent == "update_notes":
-        task = await _resolve_or_ask(update, data, context)
+        task = await _resolve_or_ask(update, data, context, intent=intent)
         if not task:
             return
         notes = data.get("notes", "")
@@ -1255,7 +1292,7 @@ async def _route_intent(update, context, data: dict, intent: str):
         )
 
     elif intent == "assign_label":
-        task = await _resolve_or_ask(update, data, context)
+        task = await _resolve_or_ask(update, data, context, intent=intent)
         if not task:
             return
         label_name = data.get("label_name", "")
@@ -1270,7 +1307,7 @@ async def _route_intent(update, context, data: dict, intent: str):
         )
 
     elif intent == "remove_label":
-        task = await _resolve_or_ask(update, data, context)
+        task = await _resolve_or_ask(update, data, context, intent=intent)
         if not task:
             return
         label_name = data.get("label_name", "")
@@ -1285,7 +1322,7 @@ async def _route_intent(update, context, data: dict, intent: str):
         )
 
     elif intent == "edit_task":
-        task = await _resolve_or_ask(update, data, context)
+        task = await _resolve_or_ask(update, data, context, intent=intent)
         if not task:
             return
 
@@ -1469,7 +1506,7 @@ async def _route_intent(update, context, data: dict, intent: str):
         )
 
     elif intent == "snooze":
-        task = await _resolve_or_ask(update, data, context)
+        task = await _resolve_or_ask(update, data, context, intent=intent)
         if not task:
             return
         store_undo(context, "edit", task["id"], task_to_dict(task))
@@ -1649,7 +1686,7 @@ async def _route_intent(update, context, data: dict, intent: str):
                 if fallback_task and fallback_task["status"] == "pending":
                     data["task_id"] = last_reminded
 
-        task = await _resolve_or_ask(update, data, context)
+        task = await _resolve_or_ask(update, data, context, intent=intent)
         if not task:
             return
         # Offer to carry over to tomorrow
@@ -1666,7 +1703,7 @@ async def _route_intent(update, context, data: dict, intent: str):
         )
 
     elif intent == "set_reminder":
-        task = await _resolve_or_ask(update, data, context)
+        task = await _resolve_or_ask(update, data, context, intent=intent)
         if not task:
             return
 
