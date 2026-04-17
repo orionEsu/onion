@@ -223,6 +223,31 @@ class TestClearCallbacks:
         # Should not crash, callback just returns
         mock_update.callback_query.edit_message_text.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_clear_confirm_overdue(self, mock_update, mock_context):
+        today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+        yesterday = (datetime.now(TIMEZONE) - timedelta(days=1)).strftime("%Y-%m-%d")
+        od = db.add_task("Overdue", yesterday, None)
+        td = db.add_task("Today", today, None)
+        _set_callback(mock_update, "clear_confirm_overdue")
+        await handle_callback(mock_update, mock_context)
+        text = mock_update.callback_query.edit_message_text.call_args.args[0]
+        assert "Cleared" in text
+        assert "overdue" in text.lower()
+        assert db.get_task(od) is None
+        assert db.get_task(td) is not None
+
+    @pytest.mark.asyncio
+    async def test_clear_confirm_overdue_with_exclude(self, mock_update, mock_context):
+        yesterday = (datetime.now(TIMEZONE) - timedelta(days=1)).strftime("%Y-%m-%d")
+        keep = db.add_task("Keep me", yesterday, None)
+        drop = db.add_task("Drop me", yesterday, None)
+        mock_context.user_data["clear_excluded_ids"] = {keep}
+        _set_callback(mock_update, "clear_confirm_overdue")
+        await handle_callback(mock_update, mock_context)
+        assert db.get_task(keep) is not None
+        assert db.get_task(drop) is None
+
 
 # ── Past-time task callbacks ──────────────────────────────────────
 

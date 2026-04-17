@@ -229,6 +229,46 @@ class TestClearTasks:
     def test_clear_invalid_scope(self):
         assert db.clear_tasks("bogus") == 0
 
+    def test_clear_overdue_only(self):
+        today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+        yesterday = (datetime.now(TIMEZONE) - timedelta(days=1)).strftime("%Y-%m-%d")
+        week_ago = (datetime.now(TIMEZONE) - timedelta(days=7)).strftime("%Y-%m-%d")
+        tomorrow = (datetime.now(TIMEZONE) + timedelta(days=1)).strftime("%Y-%m-%d")
+        od1 = db.add_task("Old A", week_ago, None)
+        od2 = db.add_task("Old B", yesterday, None)
+        td = db.add_task("Today", today, None)
+        fut = db.add_task("Future", tomorrow, None)
+        # A done overdue task should NOT be counted (pending only)
+        done_od = db.add_task("Old done", week_ago, None)
+        db.update_task_status(done_od, "done")
+
+        count = db.clear_tasks("overdue")
+        assert count == 2
+        assert db.get_task(od1) is None
+        assert db.get_task(od2) is None
+        assert db.get_task(td) is not None
+        assert db.get_task(fut) is not None
+        assert db.get_task(done_od) is not None
+
+    def test_clear_overdue_except(self):
+        yesterday = (datetime.now(TIMEZONE) - timedelta(days=1)).strftime("%Y-%m-%d")
+        week_ago = (datetime.now(TIMEZONE) - timedelta(days=7)).strftime("%Y-%m-%d")
+        od1 = db.add_task("Old A", week_ago, None)
+        od2 = db.add_task("Old B", yesterday, None)
+        od3 = db.add_task("Old C", yesterday, None)
+
+        count = db.clear_tasks_except("overdue", {od2})
+        assert count == 2
+        assert db.get_task(od1) is None
+        assert db.get_task(od2) is not None
+        assert db.get_task(od3) is None
+
+    def test_clear_overdue_empty_exclude_delegates(self):
+        yesterday = (datetime.now(TIMEZONE) - timedelta(days=1)).strftime("%Y-%m-%d")
+        db.add_task("Old", yesterday, None)
+        count = db.clear_tasks_except("overdue", set())
+        assert count == 1
+
 
 # ── Recurrence ────────────────────────────────────────────────────
 

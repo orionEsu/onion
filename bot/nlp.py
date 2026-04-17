@@ -99,11 +99,12 @@ Examples: "undo", "undo that", "revert", "take that back"
 Examples: "backup my data", "send me the database", "export my tasks"
 
 17. CLEAR TASKS:
-{{ "intent": "clear", "scope": "today" or "upcoming" or "all_tasks" or "all_labels" or "everything" or "ask", "exclude": [] }}
-Examples: "clear today's tasks" -> scope "today". "clear all upcoming tasks" -> scope "upcoming". "clear all tasks"/"delete all tasks"/"wipe all tasks" -> scope "all_tasks". "clear all labels"/"delete all labels" -> scope "all_labels". "wipe everything"/"clear everything"/"nuke it all" -> scope "everything". "clear all"/"clear" (ambiguous, no specific target) -> scope "ask".
+{{ "intent": "clear", "scope": "today" or "overdue" or "upcoming" or "all_tasks" or "all_labels" or "everything" or "ask", "exclude": [] }}
+Examples: "clear today's tasks" -> scope "today". "clear overdue tasks"/"delete all overdue"/"wipe overdue tasks"/"clear past due" -> scope "overdue". "clear all upcoming tasks" -> scope "upcoming". "clear all tasks"/"delete all tasks"/"wipe all tasks" -> scope "all_tasks". "clear all labels"/"delete all labels" -> scope "all_labels". "wipe everything"/"clear everything"/"nuke it all" -> scope "everything". "clear all"/"clear" (ambiguous, no specific target) -> scope "ask".
 "clear today's tasks but not the meeting" -> scope "today", exclude: ["meeting"]
 "clear today's tasks except task 2" -> scope "today", exclude: [2]
-"today" = only today's pending tasks. "upcoming" = all pending tasks from today onwards. "all_tasks" = every task including completed. "all_labels" = all labels. "everything" = tasks AND labels. "ask" = user said "clear all" or just "clear" without specifying what — ask them.
+"clear overdue except the chatgpt one" -> scope "overdue", exclude: ["chatgpt"]
+"today" = only today's pending tasks. "overdue" = pending tasks with a due date before today. "upcoming" = all pending tasks from today onwards. "all_tasks" = every task including completed. "all_labels" = all labels. "everything" = tasks AND labels. "ask" = user said "clear all" or just "clear" without specifying what — ask them.
 "exclude" is an array of task_ids (numbers) or task_description keywords (strings) that should NOT be cleared. Words like "but", "except", "not", "other than", "besides", "apart from" before a task reference signal exclusion — do NOT treat the excluded task as a separate action.
 
 18. COMPOUND ACTIONS (multiple things in one message):

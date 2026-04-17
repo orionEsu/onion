@@ -538,6 +538,9 @@ def clear_tasks(scope: str) -> int:
         if scope == "today":
             cur = conn.execute("DELETE FROM tasks WHERE due_date = ? AND status = 'pending'", (today,))
             return cur.rowcount
+        elif scope == "overdue":
+            cur = conn.execute("DELETE FROM tasks WHERE due_date < ? AND status = 'pending'", (today,))
+            return cur.rowcount
         elif scope == "upcoming":
             cur = conn.execute("DELETE FROM tasks WHERE due_date >= ? AND status = 'pending'", (today,))
             return cur.rowcount
@@ -569,6 +572,12 @@ def clear_tasks_except(scope: str, exclude_ids: set[int]) -> int:
         if scope == "today":
             cur = conn.execute(
                 f"DELETE FROM tasks WHERE due_date = ? AND status = 'pending' AND id NOT IN ({placeholders})",
+                (today, *exclude_ids),
+            )
+            return cur.rowcount
+        elif scope == "overdue":
+            cur = conn.execute(
+                f"DELETE FROM tasks WHERE due_date < ? AND status = 'pending' AND id NOT IN ({placeholders})",
                 (today, *exclude_ids),
             )
             return cur.rowcount

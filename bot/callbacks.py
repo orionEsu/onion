@@ -459,16 +459,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("clear_confirm_"):
         scope = data.removeprefix("clear_confirm_")
-        valid = ("today", "upcoming", "all_tasks", "all_labels", "everything")
+        valid = ("today", "overdue", "upcoming", "all_tasks", "all_labels", "everything")
         if scope not in valid:
             return
         excluded_ids = context.user_data.pop("clear_excluded_ids", set())
-        if excluded_ids and scope in ("today", "upcoming"):
+        if excluded_ids and scope in ("today", "overdue", "upcoming"):
             count = db.clear_tasks_except(scope, excluded_ids)
         else:
             count = db.clear_tasks(scope)
         scope_labels = {
-            "today": "today's", "upcoming": "upcoming",
+            "today": "today's", "overdue": "overdue",
+            "upcoming": "upcoming",
             "all_tasks": "all", "all_labels": "all",
             "everything": "all",
         }

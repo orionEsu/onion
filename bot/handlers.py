@@ -795,10 +795,11 @@ async def routine_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-VALID_CLEAR_SCOPES = {"today", "upcoming", "all_tasks", "all_labels", "everything"}
+VALID_CLEAR_SCOPES = {"today", "overdue", "upcoming", "all_tasks", "all_labels", "everything"}
 
 CLEAR_LABELS = {
     "today": "today's pending tasks",
+    "overdue": "overdue pending tasks",
     "upcoming": "all upcoming tasks",
     "all_tasks": "ALL tasks (including completed)",
     "all_labels": "ALL labels",
@@ -811,16 +812,17 @@ def _build_clear_ask_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("📋 Today's tasks", callback_data="clear_confirm_today"),
+            InlineKeyboardButton("⚠️ Overdue tasks", callback_data="clear_confirm_overdue"),
+        ],
+        [
             InlineKeyboardButton("📅 Upcoming tasks", callback_data="clear_confirm_upcoming"),
-        ],
-        [
             InlineKeyboardButton("🗑️ All tasks", callback_data="clear_confirm_all_tasks"),
-            InlineKeyboardButton("🏷️ All labels", callback_data="clear_confirm_all_labels"),
         ],
         [
+            InlineKeyboardButton("🏷️ All labels", callback_data="clear_confirm_all_labels"),
             InlineKeyboardButton("💣 Everything", callback_data="clear_confirm_everything"),
-            InlineKeyboardButton("❌ Cancel", callback_data="clear_cancel"),
         ],
+        [InlineKeyboardButton("❌ Cancel", callback_data="clear_cancel")],
     ])
 
 
@@ -841,7 +843,10 @@ async def _send_clear_confirmation(message, scope: str, excluded_ids: set | None
     skip_note = ""
     if excluded_ids:
         today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
-        tasks = db.get_tasks_for_date(today)
+        if scope == "overdue":
+            tasks = db.get_overdue_tasks()
+        else:
+            tasks = db.get_tasks_for_date(today)
         skip_names = ", ".join(
             escape(t["description"]) for t in tasks if t["id"] in excluded_ids
         )
@@ -1574,12 +1579,12 @@ async def _route_intent(update, context, data: dict, intent: str):
         # Resolve excluded tasks
         exclude_raw = data.get("exclude") or []
         excluded_ids = set()
-        if exclude_raw and scope in ("today", "upcoming"):
+        if exclude_raw and scope in ("today", "overdue", "upcoming"):
             today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
-            if scope == "today":
-                tasks = db.get_tasks_for_date(today)
+            if scope == "overdue":
+                tasks = db.get_overdue_tasks()
             else:
-                tasks = db.get_tasks_for_date(today)  # upcoming starts from today
+                tasks = db.get_tasks_for_date(today)  # today or upcoming (starts from today)
             pos_map = context.application.bot_data.get("task_pos_map", {})
             for exc in exclude_raw:
                 if isinstance(exc, int):
